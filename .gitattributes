@@ -1,0 +1,3 @@
+# 本仓库全部是文本文件（JS / YAML / JSON / Markdown），且 scripts/deploy.mjs 会对
+# 「源码 vs profile 副本」做逐字节比对 —— 钉死 LF，避免签出结果随 core.autocrlf 漂移。
+* text=auto eol=lf

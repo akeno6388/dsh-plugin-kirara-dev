@@ -1,0 +1,32 @@
+# Kirara 开发流程编排插件 —— bundle patch 层
+#
+# 这是一个「bundle 包」的 patch 文件：DSH 加载该包时读取 package.json 的
+# `dsh.bundle.patch` 字段，把本文件作为一个 insert 层覆盖到 profile 树上。
+# 顶层是数组，元素形如 `- insert: [ <entry>, ... ]`；
+# entry 的 `name` 是 ESM 模块说明符（包名或路径）。
+#
+# ⚠️ 覆盖语义：profile 自己的 cordis.patch.yml 里按 id 覆盖时，config 是
+# **整行替换**（不是逐字段合并）。所以本文件刻意不写任何与作者机器相关的值。
+#
+# 挂载方式见同目录 README.md（profile 的 cordis.patch.yml 需要引用本包）。
+
+- insert:
+    - id: kirara-dev
+      name: '@kirara/dsh-plugin-kirara-dev'
+      config:
+        # 本文件是「随包出厂」的默认层，必须保持与作者机器无关。
+        #
+        # 因此这里**一个字段都不写** —— 全部走插件内置默认值：
+        #   workspaceRoot      默认 ''  →  依次尝试 DSH_WORKSPACE、process.cwd()
+        #   buildTimeoutMs     默认 1200000（20 分钟，Gradle 冷启动够用）
+        #   buildLogTailLines  默认 60（构建日志回传行数上限）
+        #
+        # 需要覆盖其中任何一项的人，在自己 profile 的 cordis.patch.yml 里按 id 覆盖：
+        #
+        #   - id: kirara-dev
+        #     config: { workspaceRoot: 'D:\path\to\your\kirara-root' }
+        #
+        # ⚠️ 覆盖是**整行替换**：只写 workspaceRoot 的话，本文件里的字段会全部失效，
+        # 未列出的字段回落到插件的内置默认值（也就是上面那三个）。
+        # DSH 对缺省的 config 会用插件自己的 Config schema 填默认值，所以省略是安全的。
+        {}

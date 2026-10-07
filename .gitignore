@@ -1,0 +1,11 @@
+# 依赖：由 profile 侧的 pnpm 安装，插件目录自己不需要 node_modules
+node_modules/
+
+# npm 残留：本项目只用 pnpm；npm 生成的锁文件会误导后来者
+package-lock.json
+npm-shrinkwrap.json
+yarn.lock
+
+# 部署脚本与自检脚本的运行产物
+*.log
+.plugin-manager/
