@@ -6,25 +6,29 @@
 > Kirara Dev Flow — route a request to the right projects, search the docs, run the real build,
 > then hand over a device-acceptance checklist.
 
-装好之后模型手里会多出七个 `kirara_*` 工具，覆盖「读文档 → 定路线 → 改代码 → 跑构建 → 出验收清单 → 收尾」
-这整条链路。它主要解决两件事：
+装好之后模型手里会多出八个 `kirara_*` 工具，覆盖「读文档 → 定路线 → 改代码 → 跑构建 → 出验收清单 →
+同步文档 → 收尾」这整条链路。它主要解决三件事：
 
 - **文档太大，不能整篇读**。单篇技术文档最大 258 KB，`AGENTS.md` 有 153 KB，整篇塞进上下文会把它挤爆。
   插件改成按关键词检索，只取需要的片段。
 - **三端构建命令各不相同，而且都有坑**。API 端的 `.slnx` 是坏的，桌面端必须显式指定平台，Android 端不跑单元测试。
   这些直接内置成工具，顺带把实测可用的命令固化下来。
+- **文档不会自己跟上代码**。新功能落地、BUG 修完，`docs/` 下的 md 就与代码出现偏差，而这个偏差是静默的 ——
+  下一个会话读到的是过期事实。`kirara_docsync` 负责判断「这次改动该同步哪几篇、每篇改哪些章节」；
+  反过来，纯文档改动（`mode=docs`）不参与编译，也就不该为它跑一次构建。
 
 ## 功能
 
 | 工具 | 说明 |
 | --- | --- |
-| `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题 |
+| `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题。`mode=auto` 会在 `docs` / `full` / `small` 之间判定 |
 | `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读 `AGENTS.md` |
 | `kirara_docs` | 在技术文档里按关键词检索，返回 `文件:行号` 和所属章节 |
 | `kirara_route` | 把一句话需求展开成路线：涉及端、执行步骤、决策点 |
 | `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部 |
-| `kirara_verify` | 产出分步的真机验收清单（步骤 + 预期结果）；传入截图路径可以额外拿到一段视觉复核协议 |
-| `kirara_summary` | 汇总本轮变更、构建结论、验证状态、遗留风险 |
+| `kirara_verify` | 产出分步的真机验收清单（步骤 + 预期结果）；传入截图路径可以额外拿到一段视觉复核协议，`purpose=ui-design` 时给的是「该怎么改」的 P0/P1 修改建议 |
+| `kirara_docsync` | **文档同步**。自行判断本轮改动属于新功能 / BUG 修复 / 界面改动 / 纯内部整理，产出该更新的文档清单（哪几篇 + 哪些章节 + 逐条清单） |
+| `kirara_summary` | 汇总本轮变更、构建结论、验证状态、**已同步的文档**、遗留风险 |
 
 ### 自动判断这轮要不要实机验证
 
@@ -39,6 +43,66 @@
 
 这条规则刻意偏保守，因为两种误判的代价不对称：把可见功能误判成 `small` 会让人跳过实机验收直接发出去；
 误判成 `full` 只是多走一遍清单。另外「构建通过」本身也只证明能编译，不证明效果对。
+
+
+### 纯文档变更不跑构建（`mode=docs`）
+
+改一篇 md 不需要编译 —— 产物和文档之间没有因果关系。`kirara_start` 的 `mode=auto` 会识别这类请求：
+
+| 请求 | 判定 | 依据 |
+| --- | --- | --- |
+| 「同步一下文档」 | `docs` | 文档动作 + 文档对象 |
+| 「更新 API 完整文档里的评论接口章节」 | `docs` | 有「章节」这类**文档结构词** ⇒ 接口是被描述的对象，不是要改的代码 |
+| 「新增文档上传功能」 | `small`/`full` | 「新增」不在文档动作词表里 ⇒ 这是功能需求，照常构建 |
+| 「修改文档上传逻辑」 | `small`/`full` | 「逻辑」是代码对象，且没有文档结构词 |
+
+判定式是 `文档对象 ∧（文档动作 ∨ 文档结构词）∧（无代码对象 ∨ 文档结构词）`，命中即短路：
+破坏性、表结构、实机验证三类决策对一篇 md 全都不适用，硬问下去只会产出噪声。
+词表刻意**宁可漏判**（漏判只是多跑一次编译，误判会让人以为「构建都免了所以没问题」），
+所以「改一下文档」这种没有结构词的短句不会自动命中 —— 需要时显式传 `mode=docs`。
+
+`mode=docs` 下 `kirara_start` 的步骤只有四步（检索 → 编辑 md → 文档同步 → 收尾），
+不给构建命令，`kirara_verify` 也会以 `skipped` 收场。
+
+### 代码改完，文档也要跟上（`kirara_docsync`）
+
+这是流程的常规一步：**构建验证 → 实机测试 → 文档同步 → 总结**。新功能和 BUG 修复都会改变对外行为，
+所以文档同步不是「想起来才做」的附属动作。
+
+```
+kirara_docsync({
+  feature: '评论支持 @ 提醒',
+  changes: ['kirara_-server-api/Controllers/CommentsController.cs', 'kirara_server/Views/HomePage.xaml'],
+})
+```
+
+它先给变化定性（`auto` 判定，可显式覆盖）：
+
+| `kind` | 判定信号 | 文档要求 |
+| --- | --- | --- |
+| `feature` | 兜底（新功能、扩展、优化） | 必须同步 |
+| `fix` | 修复 / 报错 / 崩溃 / 失效 / bug | 必须同步（描述旧行为的地方现在是错的） |
+| `ui` | 界面 / 交互 / 社交功能词族 | 必须同步（界面契约变了） |
+| `docs` | 文档动作 + 文档对象 | 本身就是文档工作 |
+| `chore` | 格式化 / lint / 重命名变量 / 清死代码 | 不要求改正文，更新记录留一条即可 |
+
+然后按「变化特征 → 文档」的规则表挑出该更新的文档（`docs/技术栈文档.md`、`Kirara Server API 完整文档.md`、
+`需求文档.md`、`README.md`、`AGENTS.md` …），并读那几篇文档的标题，给出**具体章节**与逐条清单：
+
+```text
+📄 文档同步 [ui] —— 需更新 2 篇
+判定: 界面/交互改动 —— 界面契约（入口、状态、主题）变了，需求/技术栈文档要跟上
+目标:
+  - kirara_-server-api/docs/Kirara Server API 完整文档.md
+      章节: 三、评论系统 API (/api/comments) / 3.4 获取评论列表（分页） / 更新记录
+      为什么: 接口/鉴权行为变化 ⇒ API 完整文档的对应章节 + 「更新记录」
+清单:
+  - ... → 改「三、评论系统 API (/api/comments) / 更新记录」
+  - 逐篇核对文档里的命令 / 路径 / 版本号 / 端口 / 端点是否仍与代码一致
+```
+
+它只**判断与规划**，不替模型写文档 —— 真正的编辑仍由模型用 `write`/`edit` 完成。
+判定为 `chore` 时它会明确说「不需要改正文」，所以这不是一个「每次都必须改点什么」的负担。
 
 ### 内置的构建命令
 
@@ -61,9 +125,9 @@
 | Kirara 三端仓库（至少你关心那一端） | 被编排的对象 |
 | .NET 10 SDK + WinUI 3 工作负载 | `kirara_build` 构建 desktop |
 | JDK 17 + Android SDK | `kirara_build` 构建 media |
-| 一个支持图像输入的 chat 模型路由 | `kirara_verify` 的截图复核（可选） |
+| 一个支持图像输入的 chat 模型路由 | `kirara_verify` 的截图复核。**UI 改动必须备**（不看图就别改样式）；非 UI 改动可以不备 |
 
-只装插件、不备工具链也能用 `kirara_start` / `kirara_docs` / `kirara_route` 做路由和检索。
+只装插件、不备工具链也能用 `kirara_start` / `kirara_docs` / `kirara_route` / `kirara_docsync` 做路由、检索与文档同步。
 
 ## 安装
 
@@ -108,16 +172,22 @@ git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git
 kirara_start({ request: '优化 kirara_docs 的关键词检索排序' })
 ```
 
-返回里会给出涉及端、建议先读的文档、构建命令和是否需要实机验证。按它给的步骤改完代码后：
+返回里会给出涉及端、建议先读的文档、构建命令、是否需要实机验证，以及一条编号好的流程。按它给的步骤改完代码后：
 
 ```
-kirara_build({ project: 'desktop' })
-kirara_summary({ feature: '优化关键词检索排序', mode: 'small', changes: ['dsh-plugin-kirara-dev/lib/index.js'] })
+kirara_build({ project: 'desktop' })          // 1) 构建
+kirara_verify({ ... })                        // 2) full 时出实机清单；UI 改动带截图
+kirara_docsync({ feature: '优化关键词检索排序', changes: [...] })   // 3) 判断该同步哪几篇文档
+kirara_summary({ feature: '优化关键词检索排序', mode: 'small', changes: [...], docs: [...] })  // 4) 收尾
 ```
+
+UI 改动的那一轮，第 2 步是 `purpose: 'ui-design'` + `screenshots`，见下文
+[UI 改动必经截图复核](#ui-改动必经截图复核)；纯文档改动的 `mode=docs` 则会跳过第 1、2 步：
+md 不参与编译，也没有可验的东西。
 
 ### 直接调用单个工具
 
-跳过路由也可以，七个工具都能单独用：
+跳过路由也可以，八个工具都能单独用：
 
 ```
 kirara_profile({})                                 // 三端画像
@@ -126,18 +196,28 @@ kirara_docs({ keywords: ['MinIO', '预签名'] })      // 跨文档检索
 kirara_docs({ keywords: ['评论'], project: 'api' }) // 限定单个子项目
 kirara_build({ project: 'media' })                 // 构建 Android 端
 kirara_verify({ summary: '设置页加暗色开关', project: 'media', mode: 'full' })
+kirara_docsync({ feature: '评论支持 @ 提醒', changes: ['kirara_-server-api/Controllers/CommentsController.cs'] })
 ```
 
-### 用截图做视觉复核
+### UI 改动必经截图复核
 
 这个项目不写单元测试，验证方式 = 构建 + 人工真机清单，人工清单由 `kirara_verify` 产出。
-如果已经截好图，可以把路径一并传进去，先让图像模型过一遍：
+**界面/样式改动还要多一道**：不看截图就改配色和布局等于盲改，所以截图复核是 UI 开发的必经环节，
+不是可选项。
+
+两种 `purpose` 问的是不同的问题，别混：
+
+| `purpose` | 问的问题 | 输出 |
+| --- | --- | --- |
+| `acceptance`（默认） | 这版**能不能发** | 逐张「通过 / 不通过 + 依据」 |
+| `ui-design` | 这版**该怎么改** | 按 P0/P1/P2 分级、指名控件与数值的修改清单 |
 
 ```
 kirara_verify({
   summary: '设置页加暗色开关',
   project: 'media',
   mode: 'full',
+  purpose: 'ui-design',
   screenshots: ['D:/shots/settings-dark.png', 'D:/shots/settings-light.png'],
 })
 ```
@@ -145,9 +225,19 @@ kirara_verify({
 返回里会多出一段 `screenshotReview`，包含每张图的绝对路径、文件是否真实存在（插件会去 stat，
 缺文件会标出来而不是静默跳过），以及一段可以直接执行的复核提示词。
 
-提示词固定问四件事：是否正常渲染（白屏 / 错位 / 乱码 / 占位图）、本次改动对应的界面是否可见、
-有无明显异常（错误弹窗、缺失图标、对比度问题）、逐条给出通过或不通过的依据。它明确要求不要臆测
-截图里看不到的内容。
+`ui-design` 的提示词要求图像模型逐条给出：① 视觉层级与对齐不一致的元素（指名控件 + 建议数值）；
+② 本次改动在截图里是否真的可见、是否破坏了原本正常的区域；③ 明显缺陷（截断、溢出、对比度、
+缺图标、缺空态、深色主题下不可读）；④ 每条标 P0/P1/P2 并写成「改哪个文件或控件 → 改成什么」，
+最后给一份可直接执行的修改清单。拿到清单后**改 P0/P1 → 在同一状态重截 → 再跑一次**，
+直到没有 P0/P1 —— 收尾是循环，不是一次判定。
+
+`acceptance` 的提示词固定问四件事：是否正常渲染（白屏 / 错位 / 乱码 / 占位图）、本次改动对应的
+界面是否可见、有无明显异常（错误弹窗、缺失图标、对比度问题）、逐条给出通过或不通过的依据。
+两种都明确要求不要臆测截图里看不到的内容。
+
+**没给截图时不会静默放过**：只要 `summary` 命中界面/交互词族，或显式传了 `purpose=ui-design`，
+返回值里就会出现 `needScreenshots`，明确要求先向用户索取实机截图，并禁止在拿到截图前宣称
+「样式已经对齐」。这个兜底是机器化的 —— 不依赖模型记不记得 `purpose`。
 
 插件自身不调用模型，只产出「怎么调」的协议 —— 实际的图像请求由模型按协议发起，
 把每张图作为 attachment 发给支持图像输入的模型。这样插件保持无副作用、可以离线自检。
@@ -166,6 +256,9 @@ kirara_verify({
 | `docsMaxHits` | `12` | `kirara_docs` 默认返回的命中行数 |
 | `docsLineChars` | `200` | `kirara_docs` 命中行的正文字符上限 |
 | `docsBudgetChars` | `4000` | `kirara_docs` 单次返回的字符总预算 |
+| `textBudgetChars` | `2400` | 叙述型工具（start/route/profile/verify/summary）单次返回的字符总预算。原为 1600，抬高的原因是 UI 设计复核协议**要被原样执行**，截断即失效 |
+| `docsyncBudgetChars` | `2400` | `kirara_docsync` 单次返回的字符总预算 |
+| `docsyncMaxTargets` | `4` | `kirara_docsync` 最多推荐几篇文档 |
 
 ### 前缀缓存与上下文预算（为什么输出压得这么小）
 
@@ -194,6 +287,10 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 调大这些值等于主动换取更频繁的压缩与更低命中率 —— 真要调，请同时跑
 `node scripts/cache-budget.mjs` 并同步改里面的预算基线。
 
+工具目录本身也在预算内：8 个工具的 `name+description+parameters` 合计 **6496 字节**
+（7 个工具时是 5061；新增 `kirara_docsync` 与 `purpose`/`docs` 参数带来的一次性常驻增量）。
+这是一次性成本，换来的是「每轮都有人判断文档要不要跟上」，比事后返工便宜。基线卡在 6800 字节。
+
 ## 兼容性
 
 `peerDependencies` 声明为 `@deepseek-ai/dsh-tools@^0.2.0-rc.2`，覆盖 DSH 0.2.x 全系列
@@ -207,6 +304,20 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 插件暂不支持自动更新。先在插件页卸载，再用新地址重装一次。
 
 ## 常见问题
+
+**改一篇 md 也要我跑构建吗？**
+不用。`mode=docs` 下 `kirara_start` 不给构建命令，`kirara_verify` 直接 `skipped`，
+`kirara_summary` 的「构建验证」也写成「不适用：纯文档变更」。自动判定保守（漏判时显式传 `mode=docs`），
+理由见[纯文档变更不跑构建](#纯文档变更不跑构建modedocs)。
+
+**为什么改完 UI 它一直让我给截图？**
+那是故意的。界面改动的验收标准是「看起来对不对」，而构建通过只证明能编译。
+`kirara_verify` 只要发现 `summary` 命中界面/交互词族就会返回 `needScreenshots`，
+要求先拿到实机截图；拿到图后用 `purpose: 'ui-design'` 换回一份 P0/P1 的修改清单。
+
+**`kirara_docsync` 是不是每轮都得改文档？**
+不是。它会先给变化定性：`chore`（格式化、lint、重命名变量、清死代码）明确返回「不需要改正文」；
+`feature` / `fix` / `ui` 才要求同步，因为这三类改变了对外行为，而文档描述的是对外行为。
 
 **装完在工具表里看不到 `kirara_*`？**
 先确认插件已启用，然后**完全退出 DSH 再重启** —— 不是关窗口，也不是刷新页面，bundle 只在启动时读一次。
@@ -281,7 +392,7 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 
 ## 文档
 
-- [架构与项目画像](docs/architecture.md) —— 七个工具的实现、路由判定信号、`PROJECTS` 常量怎么维护
+- [架构与项目画像](docs/architecture.md) —— 八个工具的实现、路由判定信号、文档同步规则、`PROJECTS` 常量怎么维护
 - [DSH 插件契约](docs/plugin-contract.md) —— 插件要怎么写才会被 DSH 认可并加载
 - [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、四个自检夹具
 - [故障排查](docs/troubleshooting.md) —— 怎么判断插件加载了没，以及几个已经踩过的坑

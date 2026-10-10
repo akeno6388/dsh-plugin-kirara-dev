@@ -8,8 +8,9 @@
 dsh-plugin-kirara-dev/
 ├── package.json               # bundle 声明（dsh.bundle.patch）+ peerDependencies 契约
 ├── cordis.patch.yml           # insert 层，刻意不写任何与作者机器相关的字段
-├── lib/index.js               # 全部插件逻辑
+├── lib/index.js               # 全部插件逻辑（8 个 kirara_* 工具）
 ├── locale/{zh,en}.json        # 插件在插件列表里显示的名称与描述
+│                              #   （deploy.mjs 会逐字节比对这两个文件，漂移=列表显示旧文案）
 ├── scripts/                   # 开发期自检夹具，不进 profile
 │   ├── selftest.mjs
 │   ├── deploy.mjs
@@ -53,7 +54,7 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | `title` / `stack` / `tfm` | 显示用的名称、技术栈、目标框架 |
 | `build` / `publish` / `run` | 命令与参数，`{ cmd, args }` |
 | `specs` | 解决方案文件 |
-| `docs` | 该端相关的技术文档路径，`kirara_start` 按这个列表推荐要读的文档 |
+| `docs` | 该端相关的技术文档路径。`kirara_start` 按这个列表推荐要读的文档，`kirara_docsync` 把它当作「该同步哪些文档」的候选来源 —— 所以**只列真实存在的文件**，列了不存在的路径只会产出死链推荐 |
 | `constraints` | 该端的硬约束，会随 `kirara_profile` 一起返回 |
 | `apk` | 仅 media 有，构建产物路径，`kirara_build` 用它判断产物是否真的生成 |
 
@@ -128,9 +129,82 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 
 误判的代价不对称，所以这张词表刻意宁滥勿缺。
 
+### 纯文档变更（`mode=docs`）
+
+真值表（A=文档对象、B=文档动作、C=文档结构词、D=代码对象）：
+
+```
+docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
+```
+
+| 常量 | 覆盖 |
+| --- | --- |
+| `DOC_TARGET`（A） | 文档、README、`.md`、markdown、changelog、更新记录 |
+| `DOC_ACTION`（B） | 更新、同步、补充、编写、撰写、修订、整理、校对、完善、追加、翻译、归档 |
+| `DOC_STRUCTURE`（C） | 章节、段落、目录、条目、措辞、文案、标题、说明、描述、表格、示例、链接、错别字、排版、正文、注释 |
+| `DOC_CODE_OBJECT`（D） | 功能、页面、接口、端点、组件、按钮、逻辑、方法、函数、类、表结构、字段、索引、上传、下载、控件 |
+
+为什么是四项而不是一张词表：
+
+- 只看 A 会把「**新增文档上传功能**」判成写文档；
+- `B` 里刻意没有 新增 / 修改 / 重构 / 实现 —— 它们是代码动作，进来就会让「新增文档预览页面」免构建；
+- `C` 的存在说明句子在谈**文档里的某段文字**：「更新 API 完整文档里的评论接口章节」虽然命中 D 的
+  「接口」，但同时有 C 的「章节」⇒ 接口是被描述的对象，不是要改的代码；
+- 「修改文档上传逻辑」既无 B 也无 C ⇒ 按代码需求处理。
+
+命中即**短路**：破坏性、表结构、实机验证三类决策对一篇 md 全都不适用。判定偏保守
+（漏判只是多跑一次编译，误判会让人以为「构建都免了所以没问题」），
+没有端信号时退化成「三端都要看」，交给 `kirara_docsync` 收口。
+
 ### 空请求
 
 `request` 为空时不猜，直接返回 `blocked: true` 和一条追问性质的 `decisions`，让调用方先问清楚。
+
+## 文档同步（`kirara_docsync`）
+
+为什么单独成节：`docs/` 下的 md 是**下一个会话的作业依据**（AGENTS.md 的约束、API 文档的端点表、
+需求文档的功能现状）。代码改了而文档没改，偏差是**静默的** —— 没人报错，但后来者会照着过期事实写代码。
+
+### 变化类型判定
+
+`judgeChangeKind(feature, changes)` 按词表定性，顺序即优先级：
+
+| `kind` | 信号 | 文档要求 |
+| --- | --- | --- |
+| `docs` | `DOC_TARGET ∧ DOC_ACTION` | 必须（本身就是文档工作） |
+| `fix` | `FIX_SIGNALS`：修复 / 报错 / 崩溃 / 闪退 / 失效 / 回归 / bug / hotfix | 必须 |
+| `chore` | `CHORE_SIGNALS` 且无 `FEATURE_SIGNALS`：格式化 / 代码风格 / lint / 清理缓存 / 重命名变量 / 注释调整 / 死代码 | **不要求改正文** |
+| `ui` | `UI_HINTS` 或 `INTERACTION_SIGNALS` | 必须 |
+| `feature` | 兜底 | 必须 |
+
+`CHORE_SIGNALS` 刻意**不含**依赖升级 / 版本号 / 构建脚本 —— 这些恰恰会改动技术栈文档与 README
+（文档里写着 NuGet 清单、Gradle 版本、发版步骤），归 `chore` 会把真正该同步的文档漏掉。
+
+### 文档选择（`DOC_RULES`）
+
+「变化特征 → 文档」的规则表，命中哪条会随结果返回（`why` 字段）：
+
+| 规则 | 触发特征 | 目标文档 |
+| --- | --- | --- |
+| `api-surface` | 接口 / 端点 / api / controller / 鉴权 / jwt / signalr | api：`docs/Kirara Server API 完整文档.md` |
+| `stack` | 技术栈 / 依赖 / 框架 / 版本 / sdk / nuget / gradle / postgres / redis / minio | 各端技术栈文档 |
+| `requirement` | 需求 / 功能 / 交互 / 流程 / 界面 / 首页 / 评论 / 设置 / 登录 | desktop：`docs/需求文档.md`；media：技术栈文档 |
+| `readme` | 安装 / 用法 / 发版 / 版本号 / 下载 / apk / 部署 | 各端 `README.md` |
+| `agents` | 约束 / 构建命令 / 流程 / 规范 / 平台 / slnx / assemble | 各端 `AGENTS.md` |
+
+路径不存在的会被剔除，并在 `missing` 里报出来（不静默跳过）。一条规则都没命中时兜底到该端的
+主文档（README 除外 —— 它只在安装/用法变化时才是对的目标）。
+
+### 章节建议
+
+`featureTokens()` 从「改动描述 + 变更文件」里抽特征词：整词 + 中文 2-gram + 文件名主干，
+并剔除 更新 / 同步 / 文档 这类泛词。`pickSections()` 只读**被选中的那几篇**（最多
+`docsyncMaxTargets` 篇）的 1~3 级标题，按最长命中词排序取前 3，并始终把「更新记录」纳入候选
+（API 完整文档、技术栈文档都有这一节）。
+
+抽 2-gram 是有意的：中文没有词边界，整句匹配永远命中不了标题；代价是偶尔出现
+「令牌登录 / 解绑令牌 / 重试失败」这类相关性一般的建议 —— 它是**给模型的提示**，
+不是必须照做的指令，所以宁滥勿缺。
 
 ## 视觉复核链路
 
@@ -139,9 +213,31 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | 字段 | 含义 |
 | --- | --- |
 | `provider` / `model` | 固定为 `chatecnu` / `ecnu-plus` |
+| `purpose` | `acceptance`（能不能发）或 `ui-design`（该怎么改） |
 | `screenshots[].path` | 归一化后的绝对路径 |
 | `screenshots[].exists` | 插件实际 `stat` 的结果，缺文件会标出来，不静默跳过 |
 | `instruction` | 一段可直接执行的复核提示词 |
+
+### 两种 purpose 是不同的作业
+
+| `purpose` | 提问方式 | 下游动作 |
+| --- | --- | --- |
+| `acceptance`（默认） | 逐张「通过 / 不通过 + 依据」 | 有不通过项就修，修完重截复核 |
+| `ui-design` | ① 视觉层级/对齐不一致的元素（指名控件 + 建议数值）② 改动是否真的可见、是否破坏相邻区域 ③ 截断/溢出/对比度/缺图标/缺空态/深色主题不可读 ④ 每条标 P0/P1/P2 并写成「改哪个文件或控件 → 改成什么」 | 改 P0/P1 → 同状态重截 → 再跑一次，直到没有 P0/P1 |
+
+`ui-design` 的提示词是给**改代码**用的，所以它要求可落地；只输出「不好看」等于没输出。
+
+### UI 改动必经截图（机器化兜底）
+
+`uiWork = purpose === 'ui-design' ∨ UI_HINTS.test(summary) ∨ INTERACTION_SIGNALS.test(summary)`。
+`uiWork` 为真时：
+
+- 清单里插入截图步骤（同一窗口尺寸/主题下各状态一张）与一条「改完重截复核」的收尾步骤；
+- 没传 `screenshots` 时返回 `needScreenshots`（可选键，条件展开），明确要求先向用户索取截图，
+  并禁止在拿到图之前宣称样式已对齐。
+
+这条兜底存在的理由：`purpose` 是模型传的，模型可能忘；而 `summary` 是每次都会传的。
+只靠 `purpose` 的话，「UI 改动没看截图就收尾」仍然会发生。
 
 **插件为什么不自己调模型**：插件跑在 DSH 宿主进程里，只拿得到 `ctx.tools`，拿不到会话级的 `llm` 服务。
 所以它只产出「怎么调」的协议，真正的多模态请求由模型按协议发起，把每张图作为 attachment 发给
@@ -175,8 +271,11 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | --- | --- |
 | 某端构建方式 / TFM / 硬约束变了 | `lib/index.js` 的 `PROJECTS` |
 | 新增或调整关键词路由 | `ROUTE_SIGNALS` / `UI_HINTS` / `INTERACTION_SIGNALS` / `DESTRUCTIVE_SIGNALS` |
+| 新增或调整「纯文档变更」判定 | `DOC_TARGET` / `DOC_ACTION` / `DOC_STRUCTURE` / `DOC_CODE_OBJECT` |
+| 新增或调整「该同步哪几篇文档」 | `DOC_RULES`（规则表）与 `CHORE_SIGNALS` / `FIX_SIGNALS` / `FEATURE_SIGNALS`（定性） |
 | `.slnx` 悬空引用修好了 | `PROJECTS.api.build.args` 与 `constraints` |
 | 换了视觉复核模型 | `VISION_PROVIDER` / `VISION_MODEL` |
+| 改了任何工具的 description / 参数 / 输出预算 | `node scripts/cache-budget.mjs`，并把 `BUDGET` 基线一起改 |
 
 改完 `lib/index.js` 后需要 `node scripts/deploy.mjs` 同步到 profile 才会生效（`file:` 安装是拷贝，
 不是软链）。`cordis.patch.yml` 与 `package.json` 只在启动时读一次，改这两个必须完全重启 DSH。

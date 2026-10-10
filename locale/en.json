@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Kirara Dev Flow",
-    "description": "Orchestrates Kirara's three-repo development on DSH: read the docs, plan a route, build-verify, then hand over a device-acceptance checklist."
+    "description": "Orchestrates Kirara's three-repo development on DSH: read the docs, plan a route, build-verify, hand over a device checklist (screenshot review is mandatory for UI work), then sync the markdown docs."
   }
 }

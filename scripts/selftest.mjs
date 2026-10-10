@@ -127,6 +127,24 @@ console.log('\n=== 0. kirara_start（一句话启动，两种走向都要对） 
     Boolean(registered.get('kirara_start').output.schema.properties.reasons),
     '| 空请求 reasons =', JSON.stringify(c.value.reasons));
 
+  // (i) 纯文档变更 → auto 必须判 docs（免构建）。三类请求都要测：
+  //     真·文档请求（要 docs）、文档里描述代码对象的请求（也要 docs）、
+  //     以及「新增文档上传功能」这种**假阳性陷阱**（绝不能 docs）。
+  const i1 = await call('kirara_start', { request: '同步一下文档' });
+  console.log('[i1] 纯文档 auto        -> mode =', i1.value.mode, '| docsOnly =', i1.value.docsOnly,
+    '| 建议先读 =', i1.value.docsToRead.map((d) => `${d.project}:${d.docs.length}篇`).join(', '));
+  const i2 = await call('kirara_start', { request: '更新 API 完整文档里的评论接口章节' });
+  console.log('[i2] 文档里含代码对象词 -> mode =', i2.value.mode, '| docsOnly =', i2.value.docsOnly, '（应 true：接口是被描述的对象）');
+  const i3 = await call('kirara_start', { request: '新增文档上传功能' });
+  console.log('[i3] 「文档+上传功能」   -> mode =', i3.value.mode, '| docsOnly =', i3.value.docsOnly, '（应 false：那是功能需求）');
+  const i4 = await call('kirara_start', { request: '同步一下文档', mode: 'docs' });
+  console.log('[i4] 显式 docs          -> mode =', i4.value.mode, '| 步骤 =', i4.value.steps.length,
+    '| step1 =', i4.value.steps[0]);
+
+  // (j) UI 改动 → 流程里必须出现截图环节。不看截图改样式 = 盲改。
+  console.log('[j]  UI 流程含截图环节  ->', e.value.steps.some((s) => /截图/.test(s)),
+    '| 含文档同步环节 =', e.value.steps.some((s) => /kirara_docsync/.test(s)));
+
   console.log('--- render ---');
   console.log(a.rendered[0].text.split('\n').slice(0, 8).join('\n'));
 }
@@ -170,7 +188,14 @@ console.log('\n=== 4. kirara_route (full，破坏性改动 → 应挂起) ===');
   console.log('nextStep =', value.nextStep);
 }
 
-console.log('\n=== 5. kirara_verify (small 应跳过 / full 应给清单) ===');
+console.log('\n=== 4.5 kirara_route (docs，纯文档变更) ===');
+{
+  const { value } = await call('kirara_route', { request: '同步一下文档', mode: 'docs' });
+  console.log('mode =', value.mode, '| 实机验证 =', value.requiresDeviceVerification, '| 计划 =', value.plan.length);
+  console.log('nextStep =', value.nextStep);
+}
+
+console.log('\n=== 5. kirara_verify (small/docs 应跳过 / full 应给清单) ===');
 {
   const a = await call('kirara_verify', { summary: 'x', project: 'media', mode: 'small' });
   console.log('small  -> skipped =', a.value.skipped);
@@ -189,6 +214,50 @@ console.log('\n=== 5. kirara_verify (small 应跳过 / full 应给清单) ===');
   console.log('  screenshots =', sr.screenshots.map((s) => `${s.exists ? '存在' : '缺失'}:${s.path}`).join(' , '));
   console.log('  render 含截图段 =', c.rendered[0].text.includes('截图复核协议'));
   console.log('  howToInstall:', b.value.howToInstall);
+
+  // 纯文档变更：没有可验的东西，必须走 skipped 而不是给一份空清单
+  const d = await call('kirara_verify', { summary: 'x', project: 'desktop', mode: 'docs' });
+  console.log('docs   -> skipped =', d.value.skipped, '| steps =', d.value.steps.length);
+
+  // UI 改动没传截图 → 必须明确索取截图（这是「UI 必经截图」的机器化兜底）
+  const uiNoShot = await call('kirara_verify', { summary: '首页配色调整', project: 'desktop', mode: 'full' });
+  console.log('UI 无截图 -> needScreenshots =', Boolean(uiNoShot.value.needScreenshots), '| steps =', uiNoShot.value.steps.length);
+  console.log('  清单含截图步骤 =', uiNoShot.value.steps.some((s) => /截图/.test(s.action)));
+
+  // purpose=ui-design：协议问的是「怎么改」，不是「过没过」
+  const uiDesign = await call('kirara_verify', {
+    summary: '设置页加暗色开关',
+    project: 'media',
+    mode: 'full',
+    purpose: 'ui-design',
+    screenshots: [import.meta.filename],
+  });
+  const instr = uiDesign.value.screenshotReview.instruction;
+  console.log('ui-design -> purpose =', uiDesign.value.screenshotReview.purpose,
+    '| needScreenshots =', Boolean(uiDesign.value.needScreenshots));
+  console.log('  协议含 P0/P1 =', /P0/.test(instr) && /P1/.test(instr),
+    '| 协议要求重截复核 =', /重新截图/.test(instr),
+    '| render 硬截断 =', /输出已被 kirara-dev 截断/.test(uiDesign.rendered[0].text));
+}
+
+console.log('\n=== 5.5 kirara_docsync（自行判断该同步哪几篇文档） ===');
+{
+  for (const [feature, changes] of [
+    ['新增评论 @ 提醒功能', ['kirara_-server-api/Controllers/CommentsController.cs']],
+    ['修复令牌扫码导入失败', ['kirara_-server-api/Services/TokenImportService.cs']],
+    ['格式化代码并重命名变量', ['kirara_server/Services/Foo.cs']],
+    ['更新技术栈文档里的 Gradle 版本', []],
+  ]) {
+    const { value } = await call('kirara_docsync', { feature, changes });
+    console.log(`  「${feature}」 -> kind=${value.kind} required=${value.required} targets=${value.targets.length}`);
+    for (const t of value.targets) console.log(`      ${t.rel}  [${t.sections.join(' / ')}]`);
+  }
+  // 显式 kind 与 project 覆盖：判定能被人为收口，而不是只能接受启发式结果
+  const ch = await call('kirara_docsync', { feature: '常规迭代', changes: [], kind: 'chore', project: 'media' });
+  console.log('  显式 chore -> required =', ch.value.required, '| targets =', ch.value.targets.length,
+    '| 清单 =', ch.value.checklist.length);
+  const api = await call('kirara_docsync', { feature: '接口鉴权调整', changes: [], project: 'api' });
+  console.log('  限定 api   -> targets =', api.value.targets.map((t) => t.rel).join(', ') || '(无)');
 }
 
 console.log('\n=== 6. kirara_summary ===');

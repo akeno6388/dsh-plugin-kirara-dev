@@ -32,22 +32,27 @@ const WORKSPACE_ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(
  * 这些是「回归基线」，改动插件默认值时必须显式改这里，否则夹具会替你发现。
  *
  * 实测基线（canonical 形状 = name+description+parameters，与 DSH 记进 request/header 的一致）：
- *   修订前 2026-10-10：7 个工具合计 6326 字节，全部滞留在每次请求的前缀里。
- *   修订后：5061 字节。卡在 5400 是为了抓回归 —— 描述重新写胖就会红。
+ *   2026-10-10 第一轮：7 个工具合计 6326 → 5061 字节。
+ *   2026-10-10 第二轮（新增 kirara_docsync + 文档模式 + UI 设计复核）：8 个工具 6496 字节。
+ *     增量 = 新工具 969 + verify 的 purpose/截图描述 + summary 的 docs 参数 + start/route 的
+ *     docs 模式枚举。这是**一次性常驻增量**（约 +500 token 的前缀），比每轮多跑一次
+ *     「代码改了但没人更新文档」的返工便宜。卡在 6800 是为了抓回归 —— 描述重新写胖就会红。
  */
 const BUDGET = {
-  /** 7 个工具的 name+description+parameters JSON 总字节上限。 */
-  toolSchemaBytes: 5400,
+  /** 8 个工具的 name+description+parameters JSON 总字节上限。 */
+  toolSchemaBytes: 6800,
   /** kirara_docs 单次 render 的字符上限（插件默认 docsBudgetChars=4000 + 截断提示）。 */
   docsRenderChars: 4400,
   /** kirara_build 单次 render 的字符上限（buildBudgetChars=5000 + 头部状态行）。 */
   buildRenderChars: 5600,
-  /** kirara_start 单次 render 的字符上限（实测最坏情况：长需求 + full ≈ 1221）。 */
+  /** kirara_start 单次 render 的字符上限（实测最坏情况：长需求 + full/auto ≈ 1356）。 */
   startRenderChars: 1400,
-  /** kirara_verify full 单次 render 的字符上限。 */
+  /** kirara_verify full 单次 render 的字符上限（含 ui-design 复核协议 ≈ 1388）。 */
   verifyRenderChars: 2000,
-  /** 叙述型工具（start/route/profile/verify/summary）的硬预算 textBudgetChars。 */
-  narrativeHardCap: 1600,
+  /** kirara_docsync 单次 render 的字符上限（三端混合、4 篇目标 ≈ 1440；预算 2400 + 头部）。 */
+  docsyncRenderChars: 2500,
+  /** 叙述型工具（start/route/profile/verify/summary）的硬预算 textBudgetChars（2400，原 1600）。 */
+  narrativeHardCap: 2400,
 };
 
 /** 不应出现在 description/parameters 里的「每台机器/每次启动都不一样」的东西。 */
@@ -115,14 +120,14 @@ const firstLive = run1.live;
 const names = [...first.keys()].sort();
 console.log(`  已注册 ${names.length} 个工具：${names.join(', ')}`);
 
-const EXPECTED = ['kirara_build', 'kirara_docs', 'kirara_profile', 'kirara_route', 'kirara_start', 'kirara_summary', 'kirara_verify'];
+const EXPECTED = ['kirara_build', 'kirara_docs', 'kirara_docsync', 'kirara_profile', 'kirara_route', 'kirara_start', 'kirara_summary', 'kirara_verify'];
 const missing = EXPECTED.filter((n) => !first.has(n));
 const extra = names.filter((n) => !EXPECTED.includes(n));
 if (missing.length || extra.length) {
   bad('工具集合与名义集合不一致（会让 DSH 开新 request series 并作废整段前缀缓存）',
     `缺失=[${missing.join(', ')}] 多出=[${extra.join(', ')}]`);
 } else {
-  ok('工具集合与名义集合一致', `7 个：${names.join(', ')}`);
+  ok('工具集合与名义集合一致', `${names.length} 个：${names.join(', ')}`);
 }
 
 // 两次独立加载必须逐字节一致：只要描述里有任何「跑起来才知道」的内容，这里就会红。
@@ -170,6 +175,32 @@ const checks = [
     mode: 'full',
   }, BUDGET.startRenderChars],
   ['kirara_verify（full）', 'kirara_verify', { summary: '设置页加暗色开关', project: 'desktop', mode: 'full' }, BUDGET.verifyRenderChars],
+  [
+    'kirara_verify（ui-design + 截图，协议最长）',
+    'kirara_verify',
+    {
+      summary: '设置页加暗色开关',
+      project: 'media',
+      mode: 'full',
+      purpose: 'ui-design',
+      screenshots: [import.meta.filename, 'D:/nope/missing.png'],
+    },
+    BUDGET.verifyRenderChars,
+  ],
+  ['kirara_start（纯文档，免构建）', 'kirara_start', { request: '同步一下文档', mode: 'docs' }, 900],
+  [
+    'kirara_docsync（三端混合）',
+    'kirara_docsync',
+    {
+      feature: '新增评论 @ 提醒 + 接口鉴权调整 + 发版说明',
+      changes: [
+        'kirara_-server-api/Controllers/CommentsController.cs',
+        'kirara_server/Views/HomePage.xaml',
+        'Kirara_Media/app/build.gradle.kts',
+      ],
+    },
+    BUDGET.docsyncRenderChars,
+  ],
   ['kirara_profile（三端全量）', 'kirara_profile', {}, 1200],
   ['kirara_route（full + 阻塞）', 'kirara_route', { request: '删除旧的评论表并重构为分表存储，需要改表结构', mode: 'full' }, 1500],
   ['kirara_summary', 'kirara_summary', { feature: 'x', mode: 'full', changes: ['a', 'b'], builds: ['c'], risks: ['d'] }, 800],
@@ -197,6 +228,7 @@ console.log('\n=== 4. 叙述型工具的硬预算（异常大入参也不许灌�
     ['kirara_route', { request: 'x'.repeat(4000), mode: 'full' }],
     ['kirara_start', { request: 'x'.repeat(4000), mode: 'full' }],
     ['kirara_verify', { summary: 'x'.repeat(4000), project: 'desktop', mode: 'full' }],
+    ['kirara_docsync', { feature: 'x'.repeat(4000), changes: huge }],
   ];
   for (const [name, args] of cases) {
     const { text } = await exec(firstLive, name, args);

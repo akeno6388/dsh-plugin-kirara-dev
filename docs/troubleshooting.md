@@ -5,18 +5,19 @@
 不要押在插件检查器上 —— 某些会话的工具表里根本没有 `cordis_inspect_*`。**验收要建立在会话自己
 能观察到的证据上**：
 
-1. 工具表里有 7 个 `kirara_*`：`kirara_start` / `kirara_profile` / `kirara_docs` / `kirara_route` /
-   `kirara_build` / `kirara_verify` / `kirara_summary`
+1. 工具表里有 8 个 `kirara_*`：`kirara_start` / `kirara_profile` / `kirara_docs` / `kirara_route` /
+   `kirara_build` / `kirara_verify` / `kirara_docsync` / `kirara_summary`
 2. **真调一次看返回值**：`kirara_profile({ project: 'desktop' })` 应给出正确的 `workspaceRoot` 与
-   `buildLine`；`kirara_docs({ keywords: ['Kirara'] })` 应命中真实文档路径
+   `buildLine`；`kirara_docs({ keywords: ['Kirara'] })` 应命中真实文档路径；
+   `kirara_docsync({ feature: '修复登录失败', changes: [] })` 应给出文档清单而不是报错
 3. **同一会话里内置 `read` / `pwsh` 正常** —— 下面那个「所有工具调用全崩」的事故里，
    它们是和 `kirara_*` 一起崩的
 
-工具**总数不是判据**。会话形态不同，工具数量会浮动，只要 `kirara_*` 七个齐全即为通过。
+工具**总数不是判据**。会话形态不同，工具数量会浮动，只要 `kirara_*` 八个齐全即为通过。
 
 ### 重启后的验收
 
-1. 工具表里七个 `kirara_*` 全部出现（不必数总数）
+1. 工具表里八个 `kirara_*` 全部出现（不必数总数）
 2. 在同一会话里调一次内置 `read` 或 `pwsh`；若 `pwsh` 只报
    `Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(<目录>)`，
    那是沙箱 ACL 的前置条件问题，与插件无关，见下文
@@ -158,6 +159,21 @@ return Promise.resolve({
 **加固后的守卫**：运行时显式补两种入参（无截图 / 带截图），断言协议段出现时机与 `screenshots`
 一致、正文不得出现 `undefined` 字样；静态审计正则放宽，补上「裸标识符后跟 `}` / `)`」这一形态。
 
+**后续增量（同一个坑的第三、第四个入口）**：`kirara_verify` 新增了 `needScreenshots`，
+`kirara_docsync` 新增了 `missing` —— 又都是「条件成立才有」的可选键。
+所以 `contract-test.mjs` 的 §6.5 现在按参数组合逐条派发：
+
+| 入参 | 断言 |
+| --- | --- |
+| `full` 无截图（summary 不含界面词） | `screenshotReview` 整体省略、`needScreenshots` 不出现 |
+| `full` + `screenshots` | `screenshotReview` 出现且 `purpose` 正确 |
+| `full` + 界面词 summary（不传 `purpose`） | `needScreenshots` **必须**出现（模型忘传 purpose 时的兜底） |
+| `mode=docs` | 走 `skipped`，两个可选键都不出现 |
+| `kirara_docsync` 在空文档 root 下 | `targets` 为空但 `missing` 非空，仍是合法 JSON |
+
+**可复用的结论**：每加一个「条件成立才有」的返回字段，就多一个 `undefined` 入口。
+加字段时同时把入参组合写进 §6.5 —— 「派发过了」不等于「覆盖到了」。
+
 ## 事故四：会话里 `pwsh` 全崩于 `SetNamedSecurityInfoW failed (Win32 5)`
 
 **现象**（工作区在 `D:` 盘）：会话里所有 `pwsh` 调用失败，哪怕只有 `Get-Location`：
@@ -166,7 +182,7 @@ return Promise.resolve({
 Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(D:\works\Kirara Server Project)
 ```
 
-而 `kirara_*` 七个工具完全正常 —— 它们走自己的子进程、**不经过沙箱**，所以那段时间反而是唯一
+而 `kirara_*` 八个工具完全正常 —— 它们走自己的子进程、**不经过沙箱**，所以那段时间反而是唯一
 还能干活的工具。同一台机器上，工作区在 `C:` 用户目录的会话从不报这个错。
 
 **根因**（DSH 自带 `dsh-sandbox-windows-acl` 的文档原文）：
@@ -200,3 +216,7 @@ Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(D:\works\Kirara Server
 | `kirara_profile` 的 `workspaceRoot` 不对 | 没配置也没设 `DSH_WORKSPACE` | 在 profile 的 `cordis.patch.yml` 里覆盖，或设环境变量 |
 | `pwsh` 报 `SetNamedSecurityInfoW failed` | 工作区目录缺「当前用户完全控制」ACE | 跑 `diagnose-windows-sandbox-acl` |
 | 改了源码但行为没变 | `file:` 安装是拷贝，副本没刷新 | `node scripts\deploy.mjs` |
+| 明明是改文档，却被判成 `full`/`small` 要构建 | `mode=docs` 的判定词表刻意保守（缺「章节/段落」这类结构词） | 显式传 `mode: 'docs'` |
+| `kirara_verify` 反复要求先给截图 | **不是故障**：UI 改动必经截图（`needScreenshots`），不看图就改样式等于盲改 | 截图后带 `purpose: 'ui-design'` 再调一次 |
+| `kirara_docsync` 推荐的文档打不开 | 规则命中了不存在的路径（`PROJECTS.docs` 里的死链） | 看返回里的 `missing` 字段，修 `PROJECTS[].docs` |
+| 工具 schema 字节数超了 `cache-budget` 基线 | 新增工具或把 description 写胖了 | 跑 `node scripts\cache-budget.mjs`，确认增量值得后再改 `BUDGET` |

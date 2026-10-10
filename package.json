@@ -2,7 +2,7 @@
   "name": "@kirara/dsh-plugin-kirara-dev",
   "version": "0.1.0",
   "private": true,
-  "description": "Kirara 多端项目开发流程编排插件：解读文档 → 提问定路线 → 开发 → 构建验证 → 实机验证清单 → 总结",
+  "description": "Kirara 多端项目开发流程编排插件：解读文档 → 提问定路线 → 开发 → 构建验证 → 实机验证清单（UI 必过截图复核）→ 文档同步 → 总结",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

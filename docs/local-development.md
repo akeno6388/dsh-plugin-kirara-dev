@@ -89,11 +89,12 @@ node scripts\mount-check.mjs       # 3) 挂载路径检查（内部串 contract-
 
 | 脚本 | 覆盖的失败面 | 是否走宿主真实代码 |
 | --- | --- | --- |
-| `selftest.mjs` | 工具**业务逻辑**：注册 + 逐个执行（含一次真实 `dotnet build`） | ✗ 假 `ctx.tools` |
+| `selftest.mjs` | 工具**业务逻辑**：注册 + 逐个执行（含一次真实 `dotnet build`）、`mode=docs` 判定的三类反例、`needScreenshots` 兜底、`kirara_docsync` 的变化定性 | ✗ 假 `ctx.tools` |
 | `deploy.mjs` | **部署形态**：profile 副本 == 源码、profile 里无宿主包副本 | ✗ 只做文件/清单断言 |
 | `mount-check.mjs` | **解析归层**：复现 `routeScoped` 的两锚点判定 + 清单形态 | ✗ 模拟判定 |
 | `contract-test.mjs` | **真实调度链路**：真 `cordis.Context` + 真 `ToolRuntime`，逐个 `prepare()` | ✓ 全真 |
 | `cache-budget.mjs` | **前缀缓存预算**：工具目录逐字节稳定 + 描述无易变内容 + 每个工具的返回值不超预算 | ✗ 假 `ctx.tools`（含一次假 `gradlew.bat` 真派发） |
+| `contract-test.mjs` 的 §6.5 | **可选键边界**：`artifact` / `screenshotReview` / `needScreenshots` 三类条件展开键，以及 `mode=docs` 的短路分支 | ✓ 全真 |
 
 ```powershell
 node scripts\deploy.mjs          # 部署最新源码到 profile + 校验不变量
@@ -111,6 +112,20 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 [README「前缀缓存与上下文预算」](../README.md#前缀缓存与上下文预算为什么输出压得这么小)。
 
 夹具里写死的预算常量是**回归基线**：改了插件默认值就得显式改它，否则夹具会拦下来。
+当前基线（`cache-budget.mjs` 的 `BUDGET`）：
+
+| 常量 | 值 | 实测 | 说明 |
+| --- | --- | --- | --- |
+| `toolSchemaBytes` | 6800 | 6496（8 个工具） | 7 个工具时 5061；`kirara_docsync` 与 `purpose`/`docs` 参数带来的一次性常驻增量 |
+| `docsRenderChars` | 4400 | 4014 | 宽泛关键词 + `maxHits=40` |
+| `buildRenderChars` | 5600 | 5124 | 200 行 × 400 字符的假构建日志 |
+| `startRenderChars` | 1400 | 1356 | 长需求 + `auto`（含 UI + 文档同步两条额外步骤） |
+| `verifyRenderChars` | 2000 | 1412 | `purpose=ui-design` + 截图，协议最长 |
+| `docsyncRenderChars` | 2500 | 1440 | 三端混合、4 篇目标 |
+| `narrativeHardCap` | 2400 | 2444（含截断说明） | `textBudgetChars` 默认值；原 1600，因为 UI 设计复核协议被截断即失效 |
+
+`kirara_start` 的 1400 只剩 44 字符余量：往 `steps` 里再加一条就会红。
+这是有意的 —— 流程说明每次调用都会重放进上下文，它是最该被盯住的一段。
 
 ### 为什么 `contract-test.mjs` 才是关键
 
@@ -123,16 +138,16 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
   ✓ TOOL_RUNTIME_SCHEDULER 可解析且带 prepare()
 === 3. 加载插件并 apply() ===
   ✓ apply(ctx, config) 未抛异常
-  ✓ 真实 ToolRuntime 里找到全部 7 个 kirara_* 定义
+  ✓ 真实 ToolRuntime 里找到全部 8 个 kirara_* 定义
 === 4. 真实调度器 prepare()（每个工具） ===
   ✓ kirara_start: prepare → dispatch      arguments = {"request":"…"}
   ✓ kirara_profile: prepare → dispatch    arguments = {}
   …
 === 5. presentCall() 视图形状 ===
-  ✓ 七个全部 card=generic / title 非空 / kind ∈ ToolCallKind
+  ✓ 八个全部 card=generic / title 非空 / kind ∈ ToolCallKind
 === 6. 完整链路 prepare → dispatch → finish（kirara_profile） ===
   ✓ 工具体执行成功（isError 非 true）
-=== 6.5 工具返回值 lossless JSON 边界（7 个工具真派发） ===
+=== 6.5 工具返回值 lossless JSON 边界（8 个工具真派发） ===
   ✓ 返回值可被宿主接受
   ✓ kirara_build 构建成功但无 APK: 返回值为 lossless JSON    exit=0、无产物 ⇒ artifact 必须省略而不是 undefined
   ✓ kirara_verify full 无截图（screenshotReview 必须整体省略）: 通过
@@ -193,3 +208,9 @@ ok = true  exit = 0  duration = 2.3s
 | `lib/index.js` | `node scripts/deploy.mjs` 重新部署（`file:` 是拷贝，pnpm 不会自动重建副本） |
 | `cordis.patch.yml` / `package.json` | 重新部署 + **完全重启 DSH**（这两个只在启动时读一次） |
 | `PROJECTS` / `SAFETY_RULES` | 同 `lib/index.js` |
+| 任一工具的 description / 参数 / 输出预算 | 先跑 `node scripts/cache-budget.mjs`，同步 `BUDGET` 基线，再部署 |
+| `locale/{zh,en}.json` | 重新部署（`deploy.mjs` 逐字节比对，漂移只会静默显示旧文案） |
+| 想验证本轮改动是否真的进了 profile | `node scripts/deploy.mjs --check`（有漂移 exit 1） |
+
+**改完在任何会话里都建议先跑一遍三条夹具**：`selftest` 抓业务逻辑、`contract-test --from source` 抓真实
+调度链路、`cache-budget` 抓前缀缓存。三条都过再部署，能省掉一轮「重启 DSH 才发现又崩了」。

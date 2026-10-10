@@ -11,7 +11,7 @@
  * 这个脚本做四件事：
  *   1. 用宿主安装目录那一份 `dsh-tools`（经模块拦截钩子，语义等同 app-boot 的
  *      `routeScoped`）构造**真实** cordis `Context` + **真实** `ToolRuntime`；
- *   2. 把插件 `apply()` 挂上去，逐个 `prepare()` 七个工具，证明调度器存在且可派发；
+ *   2. 把插件 `apply()` 挂上去，逐个 `prepare()` 八个工具，证明调度器存在且可派发；
  *   3. 对 `kirara_profile` 跑完整 `prepare → dispatch → finish`，证明结果真的产出；
  *   4. 断言「宿主作用域内不存在第二个物理副本」（模块身份唯一）。
  *
@@ -125,7 +125,7 @@ function lookup(name) {
   return undefined;
 }
 
-const TOOL_NAMES = ['kirara_start', 'kirara_profile', 'kirara_docs', 'kirara_route', 'kirara_build', 'kirara_verify', 'kirara_summary'];
+const TOOL_NAMES = ['kirara_start', 'kirara_profile', 'kirara_docs', 'kirara_route', 'kirara_build', 'kirara_verify', 'kirara_summary', 'kirara_docsync'];
 const definitions = new Map();
 for (const name of TOOL_NAMES) {
   const def = lookup(name);
@@ -231,8 +231,8 @@ try {
 //
 // 为什么之前没抓到：§6 只对 kirara_profile 跑了完整 dispatch，而 kirara_profile 的返回值
 // 恰好干净。夹具此前只检查 `prepare()` 的形状，从不检查**返回值**。
-// 这一节把 7 个工具全部真派发一次（临时空 root，毫秒级），外加 kirara_build 的两种退出码。
-console.log('\n=== 6.5 工具返回值 lossless JSON 边界（7 个工具真派发） ===');
+// 这一节把 8 个工具全部真派发一次（临时空 root，毫秒级），外加 kirara_build 的两种退出码。
+console.log('\n=== 6.5 工具返回值 lossless JSON 边界（8 个工具真派发） ===');
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { isJsonValue, snapshotJsonValue } = await import(pathToFileURL(join(hostRoot, '@deepseek-ai', 'dsh-util-values', 'lib', 'index.js')).href);
@@ -276,7 +276,7 @@ const inspectOutcome = (name, outcome) => {
 };
 
 try {
-  // (a) 7 个工具全覆盖。kirara_build 单独在 (b) 里测（它的 sampleArgs 会真跑 dotnet，必须换掉）。
+  // (a) 8 个工具全覆盖。kirara_build 单独在 (b) 里测（它的 sampleArgs 会真跑 dotnet，必须换掉）。
   for (const name of TOOL_NAMES) {
     if (name === 'kirara_build') continue;
     const outcome = await dispatchTool(name, sampleArgs(definitions.get(name)));
@@ -312,9 +312,18 @@ try {
   //     `tool "kirara_verify" returned invalid output`。此前 (a) 虽然也派发了
   //     kirara_verify，却覆盖不到：`sampleFor` 给 mode 造的是 'auto'，而协议生成与否
   //     只取决于 screenshots —— 参数恰好绕开了出问题的那条分支。所以这里显式补两种入参。
-  for (const [title, verifyArgs] of [
-    ['kirara_verify full 无截图（screenshotReview 必须整体省略）', { summary: '契约测试：无截图', project: 'media', mode: 'full' }],
-    ['kirara_verify full 带截图（screenshotReview 应出现）', { summary: '契约测试：带截图', project: 'media', mode: 'full', screenshots: [import.meta.filename] }],
+  // 第三个元素是「本用例是否应当索取截图（needScreenshots）」，按 summary 词族与 purpose 事先算好：
+  //   - summary 命中界面/交互词族（UI_HINTS/INTERACTION_SIGNALS）的用例，即使没传 purpose 也要索取 ——
+  //     这是「模型忘了声明 purpose」时的兜底，必须被夹具钉住。
+  for (const [title, verifyArgs, wantNeed] of [
+    ['kirara_verify full 无截图（screenshotReview 必须整体省略）', { summary: '契约测试：接口字段调整', project: 'media', mode: 'full' }, false],
+    ['kirara_verify full 带截图（screenshotReview 应出现）', { summary: '契约测试：接口字段调整', project: 'media', mode: 'full', screenshots: [import.meta.filename] }, false],
+    ['kirara_verify UI 词命中但没传截图（needScreenshots 应出现）', { summary: '设置页配色调整', project: 'media', mode: 'full' }, true],
+    // UI 设计复核：新增 purpose/screenshots 组合，返回值里多一个 needScreenshots 可选键 ——
+    // 这正是「可选键没条件展开」最容易复发的地方（事故三同源）。
+    ['kirara_verify ui-design 无截图（needScreenshots 应出现）', { summary: '契约测试：接口字段调整', project: 'media', mode: 'full', purpose: 'ui-design' }, true],
+    ['kirara_verify ui-design 带截图', { summary: '设置页配色调整', project: 'media', mode: 'full', purpose: 'ui-design', screenshots: [import.meta.filename] }, false],
+    ['kirara_verify docs（纯文档，必须 skipped）', { summary: '契约测试：只改 md', project: 'desktop', mode: 'docs' }, false],
   ]) {
     const outcome = await dispatchTool('kirara_verify', verifyArgs);
     const problem = inspectOutcome('kirara_verify', outcome);
@@ -333,7 +342,52 @@ try {
       bad(`${title}: 截图协议出现时机不对`, `传了 screenshots ⇒ 应有协议；实际 hasReview=${hasReview}`);
       continue;
     }
-    ok(`${title}: 通过`, `协议段 ${hasReview ? '已出现' : '已省略'}，正文无 undefined`);
+    // needScreenshots 与 screenshotReview 是互斥的两个可选键：UI 改动没图 ⇒ 只要前者。
+    const hasNeed = text.includes('截图缺失');
+    if (hasNeed !== wantNeed) {
+      bad(`${title}: needScreenshots 出现时机不对`, `UI 改动无截图 ⇒ 应索取截图；实际 hasNeed=${hasNeed}`);
+      continue;
+    }
+    const skipped = /跳过实机验证/.test(text);
+    const wantSkipped = verifyArgs.mode === 'docs';
+    if (skipped !== wantSkipped) {
+      bad(`${title}: docs 模式必须跳过实机验证`, `mode=docs ⇒ skipped；实际 skipped=${skipped}`);
+      continue;
+    }
+    ok(`${title}: 通过`, `协议段 ${hasReview ? '已出现' : '已省略'}、截图索取 ${hasNeed ? '已出现' : '未出现'}，正文无 undefined`);
+  }
+
+  // (c2) kirara_docsync：8 个工具里唯一「新增的可选键 + 新增的必填键」同时出现的工具
+  //      （needScreenshots 之外的第二处 lossless 风险面）。临时 root 下没有文档 ⇒
+  //      targets 为空、missing 非空，正好覆盖「规则指向的文档不存在」这条分支。
+  for (const [title, docsyncArgs] of [
+    ['kirara_docsync 无文档的 root（targets 空 + missing 非空）', { feature: '契约测试：新增评论功能', changes: ['kirara_-server-api/Controllers/CommentsController.cs'] }],
+    ['kirara_docsync chore（required=false 分支）', { feature: '格式化代码', kind: 'chore' }],
+  ]) {
+    const outcome = await dispatchTool('kirara_docsync', docsyncArgs);
+    const problem = inspectOutcome('kirara_docsync', outcome);
+    if (problem !== undefined) {
+      bad(`${title}: 返回值为 lossless JSON`, problem);
+      continue;
+    }
+    const text = (outcome.finished?.content ?? []).map((block) => block?.text ?? '').join('\n');
+    if (/\bundefined\b/.test(text)) {
+      bad(`${title}: 正文不得出现 undefined 字样`, text.split('\n').slice(0, 3).join(' / '));
+      continue;
+    }
+    // 用 KIND_LABEL.chore 的固定文案判断分支，而不是用「需更新 N 篇」——
+    // 临时 root 下没有任何文档，required=true 也可能 0 个 target，两者不等价。
+    const isChore = docsyncArgs.kind === 'chore';
+    const looksChore = /纯内部整理/.test(text);
+    if (looksChore !== isChore) {
+      bad(`${title}: required 分支呈现不对`, `kind=${docsyncArgs.kind} ⇒ 纯内部整理=${isChore}；实际 ${looksChore}`);
+      continue;
+    }
+    const missingShown = /规则指向但\*\*不存在\*\*/.test(text);
+    ok(
+      `${title}: 通过`,
+      `required=${!isChore}、缺失文档提示 ${missingShown ? '已出现' : '未出现'}，正文无 undefined`,
+    );
   }
 
   // (d) kirara_start 不得把「交互功能」悄悄降级成 small（免实机验证）。
@@ -356,6 +410,29 @@ try {
       continue;
     }
     ok(`kirara_start ${title}: 未降级为 small`, text.split('\n')[1]?.slice(0, 88));
+  }
+
+  // (d2) 纯文档变更经宿主流转也必须成立（mode=docs 是新分支，必须真派发一次）。
+  for (const [title, request] of [
+    ['纯文档请求', '同步一下文档'],
+    ['文档里描述接口的请求', '更新 API 完整文档里的评论接口章节'],
+  ]) {
+    const outcome = await dispatchTool('kirara_start', { request });
+    const problem = inspectOutcome('kirara_start', outcome);
+    if (problem !== undefined) {
+      bad(`kirara_start ${title}: 返回值为 lossless JSON`, problem);
+      continue;
+    }
+    const text = (outcome.finished?.content ?? []).map((block) => block?.text ?? '').join('\n');
+    if (!/mode=docs/.test(text)) {
+      bad(`kirara_start ${title}: 未判为纯文档变更`, `md 不参与编译，应走 docs（免构建）；正文：${text.split('\n').slice(0, 2).join(' / ')}`);
+      continue;
+    }
+    if (!/本轮不构建/.test(text)) {
+      bad(`kirara_start ${title}: 没有说明本轮不构建`, text.split('\n').slice(0, 6).join(' / '));
+      continue;
+    }
+    ok(`kirara_start ${title}: 判为 docs 且不构建`, text.split('\n')[1]?.slice(0, 80));
   }
 
   // (e) 静态审计：源码里不得出现「显式赋 undefined」的返回字段。
