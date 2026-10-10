@@ -275,7 +275,8 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 **② 返回值必须有硬预算。** 工具返回值会永久留在会话上下文里，上下文越大越早触到
 `dsh-compaction-basic` 的压缩阈值；而一次 compaction 会重写历史头部（并从第一条非 system
 消息开始），连带再次触发上面那条「原地改写系统节点」—— 于是整段前缀缓存又一次作废。
-实测（2026-10，见 `.dsh-debug/cache-probe3.mjs`、`cache-probe5.mjs`）：
+实测（2026-10；探针脚本 `cache-probe3.mjs`、`cache-probe5.mjs` 在 Kirara 工作区根目录的
+`.dsh-debug/` 下，**不在本仓库内** —— 本仓库里长期盯着这条预算的是 `scripts/cache-budget.mjs`）：
 
 - 单次 `kirara_docs` 曾返回 12.9–15.1 KB（默认 `maxHits` 40、每行 400 字符）
 - 单次 `kirara_build` 曾返回 16.8 KB（60 行日志、无逐行上限）
@@ -324,7 +325,8 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 重启后请在**新会话**里验证：旧会话的历史消息里已经录下了加载失败时的工具快照，旧记录不会自动修复。
 
 **启用这个插件之后缓存命中率变低了吗？**
-这个问题被实测查过一遍（2026-10，脚本在 `.dsh-debug/cache-probe*.mjs`），结论分三层：
+这个问题被实测查过一遍（2026-10，探针脚本是工作区根目录 `.dsh-debug/cache-probe*.mjs`，
+在本仓库之外），结论分三层：
 
 1. **插件不会让工具目录抖动。** 同一会话里所有 `request/header` 的 `tools` 快照逐字节相同，
    `reason` 只有 `initial` / `series`，从未因工具变化出现 `change` —— 也就是说插件没有让 DSH 开新
@@ -347,7 +349,8 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 > 该旋钮已于 2026-10-10 修过一轮：`deepseek-flash` 官方规格是 context 1M / max output 384K，
 > 而 `maxTokens` 原本跟着 DSH 默认值 `256000`（`dsh-llm-deepseek/lib/index.js:21`），
 > 把阈值压到 678,464。现在 profile 里设成 `131072`（饱和点 134,464 以内），阈值顶到 **800,000**。
-> 校验脚本：`.dsh-debug/verify-compaction-threshold.mjs`，公式反证：`.dsh-debug/cache-probe7.mjs`。
+> 校验脚本：工作区根目录的 `.dsh-debug/verify-compaction-threshold.mjs`，公式反证：
+> `.dsh-debug/cache-probe7.mjs`（两者都在本仓库之外）。
 
 **`kirara_profile` 返回的 `workspaceRoot` 不对？**
 按「安装」第 3 步覆盖配置，或者给 DSH 进程设置 `DSH_WORKSPACE` 环境变量。
@@ -394,7 +397,7 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 
 - [架构与项目画像](docs/architecture.md) —— 八个工具的实现、路由判定信号、文档同步规则、`PROJECTS` 常量怎么维护
 - [DSH 插件契约](docs/plugin-contract.md) —— 插件要怎么写才会被 DSH 认可并加载
-- [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、四个自检夹具
+- [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、五个自检夹具
 - [故障排查](docs/troubleshooting.md) —— 怎么判断插件加载了没，以及几个已经踩过的坑
 
 ## 许可
