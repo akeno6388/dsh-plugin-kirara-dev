@@ -15,9 +15,26 @@ dsh-plugin-kirara-dev/
 │   ├── deploy.mjs
 │   ├── mount-check.mjs
 │   ├── contract-test.mjs
+│   ├── cache-budget.mjs       # 前缀缓存回归：工具目录逐字节稳定 + 返回值预算
 │   └── host-interception.mjs
 └── docs/
 ```
+
+## 前缀缓存契约：改这个插件时最容易踩坏的东西
+
+DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响到的只有两条路径：
+
+1. **工具目录抖动** —— `dsh-session` 把 `request/header`（`config` + `tools` 的 JSON 快照）记进会话；
+   `dsh-agent-loop` 一旦发现装配出的工具集合与快照不等，就开一条新的 request series，
+   而 `SystemPromptProjection.project()` 在开新 series 时是**原地改写对话第一条 system 消息**
+   （`replace(head.seq, rendered)`），不是尾部追加 —— 整段前缀缓存作废。
+   ⇒ 工具名 / `description` / `parameters` 必须是随启动固定的字面量，不含时间戳、文件状态、
+   环境变量或任何运行时探测结果；也不在运行期增删工具。
+2. **上下文膨胀** —— 返回值永久留在会话里；上下文越早触到 `dsh-compaction-basic` 的压缩阈值，
+   就越早发生 compaction，而 compaction 同样会重写历史头部并再次触发上面的原地改写。
+   ⇒ 每个工具的返回值都要过 `clampLine` / `budgetLines` / `clampText` 三道预算。
+
+`scripts/cache-budget.mjs` 是这两条的机器化守卫，改 `description` 或任何输出预算后必跑。
 
 进 profile 的只有 `package.json`、`lib/index.js`、`cordis.patch.yml`，外加 npm 强制包含的 `README.md`
 （见 `package.json` 的 `files` 数组）。`scripts/`、`docs/` 和 `node_modules/` 都不进 profile。

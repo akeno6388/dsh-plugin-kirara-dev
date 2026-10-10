@@ -85,7 +85,7 @@ node scripts\mount-check.mjs       # 3) 挂载路径检查（内部串 contract-
 **必须开新会话**：旧会话的历史消息里已经录下了修复前的失败工具调用，以及那份残缺的工具名快照，
 旧记录无法修复，只会在新会话里干净地重建。
 
-## 四个自检夹具
+## 五个自检夹具
 
 | 脚本 | 覆盖的失败面 | 是否走宿主真实代码 |
 | --- | --- | --- |
@@ -93,13 +93,24 @@ node scripts\mount-check.mjs       # 3) 挂载路径检查（内部串 contract-
 | `deploy.mjs` | **部署形态**：profile 副本 == 源码、profile 里无宿主包副本 | ✗ 只做文件/清单断言 |
 | `mount-check.mjs` | **解析归层**：复现 `routeScoped` 的两锚点判定 + 清单形态 | ✗ 模拟判定 |
 | `contract-test.mjs` | **真实调度链路**：真 `cordis.Context` + 真 `ToolRuntime`，逐个 `prepare()` | ✓ 全真 |
+| `cache-budget.mjs` | **前缀缓存预算**：工具目录逐字节稳定 + 描述无易变内容 + 每个工具的返回值不超预算 | ✗ 假 `ctx.tools`（含一次假 `gradlew.bat` 真派发） |
 
 ```powershell
 node scripts\deploy.mjs          # 部署最新源码到 profile + 校验不变量
 node scripts\selftest.mjs        # 工具级自检
 node scripts\mount-check.mjs     # 挂载路径检查（内部会串 contract-test.mjs）
 node scripts\contract-test.mjs   # 只跑真实契约测试
+node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 输出预算后必跑）
 ```
+
+### 为什么要有 `cache-budget.mjs`
+
+这个插件对 DSH 前缀缓存的全部影响面只有两处，而且都能被机器检查：工具目录必须逐字节固定
+（否则 DSH 开新 request series 并原地改写系统提示节点，整段前缀作废），以及每个工具的返回值
+必须有硬预算（否则上下文更快触到压缩阈值，而 compaction 同样作废整段前缀）。机制细节见
+[README「前缀缓存与上下文预算」](../README.md#前缀缓存与上下文预算为什么输出压得这么小)。
+
+夹具里写死的预算常量是**回归基线**：改了插件默认值就得显式改它，否则夹具会拦下来。
 
 ### 为什么 `contract-test.mjs` 才是关键
 

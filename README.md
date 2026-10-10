@@ -160,7 +160,39 @@ kirara_verify({
 | --- | --- | --- |
 | `workspaceRoot` | `''` | 三端仓库的父目录。留空时依次回退到 `DSH_WORKSPACE`、当前工作目录 |
 | `buildTimeoutMs` | `1200000` | 单次构建最长等待（20 分钟） |
-| `buildLogTailLines` | `60` | 回传的日志尾部行数 |
+| `buildLogTailLines` | `25` | 回传的日志尾部行数 |
+| `buildLogLineChars` | `300` | 单条日志行的字符上限（NuGet/Gradle 单行可以上千字符） |
+| `buildBudgetChars` | `5000` | `kirara_build` 单次返回的字符总预算；超出时先保 `errors`，再保日志尾部 |
+| `docsMaxHits` | `12` | `kirara_docs` 默认返回的命中行数 |
+| `docsLineChars` | `200` | `kirara_docs` 命中行的正文字符上限 |
+| `docsBudgetChars` | `4000` | `kirara_docs` 单次返回的字符总预算 |
+
+### 前缀缓存与上下文预算（为什么输出压得这么小）
+
+DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件能影响到的只有两条路径，
+两条都在 `scripts/cache-budget.mjs` 里被机器盯着：
+
+**① 工具目录必须逐字节固定。** DSH 把 `request/header`（`config` + `tools` 的 JSON 快照）
+记进会话；一旦装配出的工具集合与已记录的快照不等，`dsh-agent-loop` 就会开一条
+**新的 request series**，而 `SystemPromptProjection.project()` 在开新 series 时会把
+**对话最前面那条 system 消息原地改写**，而不是在尾部追加 —— 整段历史的前缀缓存当场作废。
+所以工具名、`description`、`parameters` 全部是随进程启动固定的字面量，不含时间戳、
+文件状态、环境变量或任何运行时探测结果，也不在运行期增删工具。
+
+**② 返回值必须有硬预算。** 工具返回值会永久留在会话上下文里，上下文越大越早触到
+`dsh-compaction-basic` 的压缩阈值；而一次 compaction 会重写历史头部（并从第一条非 system
+消息开始），连带再次触发上面那条「原地改写系统节点」—— 于是整段前缀缓存又一次作废。
+实测（2026-10，见 `.dsh-debug/cache-probe3.mjs`、`cache-probe5.mjs`）：
+
+- 单次 `kirara_docs` 曾返回 12.9–15.1 KB（默认 `maxHits` 40、每行 400 字符）
+- 单次 `kirara_build` 曾返回 16.8 KB（60 行日志、无逐行上限）
+- 在 69 万 token 的对话上，一次 compaction 让下一条请求的 `cacheRead` 从 ~67 万掉到 ~8.5 千
+  —— 约 67 万 token 重算
+
+所以现在：`kirara_docs` 默认 12 行 / 每行 200 字符 / 整体 4000 字符，`kirara_build` 默认
+25 行 / 每行 300 字符 / 整体 5000 字符，超预算时明确告知模型「被截断了，请收窄查询」。
+调大这些值等于主动换取更频繁的压缩与更低命中率 —— 真要调，请同时跑
+`node scripts/cache-budget.mjs` 并同步改里面的预算基线。
 
 ## 兼容性
 
@@ -179,6 +211,32 @@ kirara_verify({
 **装完在工具表里看不到 `kirara_*`？**
 先确认插件已启用，然后**完全退出 DSH 再重启** —— 不是关窗口，也不是刷新页面，bundle 只在启动时读一次。
 重启后请在**新会话**里验证：旧会话的历史消息里已经录下了加载失败时的工具快照，旧记录不会自动修复。
+
+**启用这个插件之后缓存命中率变低了吗？**
+这个问题被实测查过一遍（2026-10，脚本在 `.dsh-debug/cache-probe*.mjs`），结论分三层：
+
+1. **插件不会让工具目录抖动。** 同一会话里所有 `request/header` 的 `tools` 快照逐字节相同，
+   `reason` 只有 `initial` / `series`，从未因工具变化出现 `change` —— 也就是说插件没有让 DSH 开新
+   request series。（这也正是 `cache-budget.mjs` 要长期盯着的东西。）
+2. **真正的损失来自 compaction 和轮次边界，都发生在核心。** 把「第 N 条请求的完整提示长度」
+   当作第 N+1 条的理论命中上限，差额就是被重复计费的部分：在开了插件的长会话里，这部分占全部
+   miss 的 39%–66%，归因区间事件是 `compaction/start…end`、`compaction/prune`、以及轮次边界的
+   `agent/inbox/spliced`。机制上，这些事件都会让 DSH 开新 series，而
+   `SystemPromptProjection.project()` 开新 series 时是**原地改写对话第一条 system 消息**，
+   于是一次 compaction 就能让 69 万 token 的会话把 `cacheRead` 从 ~67 万打到 ~8.5 千。
+3. **插件能做的只有「别把上下文推大」。** 实测它在全工具输出里占 5%–31%（单次 `kirara_docs`
+   曾返回 12.9–15.1 KB，单次 `kirara_build` 曾 16.8 KB），而上下文越大越早触发上面第 2 条。
+   本次修订就是压这个占比。
+
+如果命中率仍然上不去，要查的是核心侧的两个旋钮而不是插件：
+`dsh-compaction-basic` 的阈值 `thresholdTokens = min(contextWindow × 0.8, contextWindow − maxTokens − 65536)`
+（默认 `thresholdRatio=0.8` / `retainRatio=0.16` / `headroomTokens=65536`，见 `dsh-compaction-basic/lib/index.js:15,17,63`），
+以及每次开新 series 时对系统节点 0 的原地改写。
+
+> 该旋钮已于 2026-10-10 修过一轮：`deepseek-flash` 官方规格是 context 1M / max output 384K，
+> 而 `maxTokens` 原本跟着 DSH 默认值 `256000`（`dsh-llm-deepseek/lib/index.js:21`），
+> 把阈值压到 678,464。现在 profile 里设成 `131072`（饱和点 134,464 以内），阈值顶到 **800,000**。
+> 校验脚本：`.dsh-debug/verify-compaction-threshold.mjs`，公式反证：`.dsh-debug/cache-probe7.mjs`。
 
 **`kirara_profile` 返回的 `workspaceRoot` 不对？**
 按「安装」第 3 步覆盖配置，或者给 DSH 进程设置 `DSH_WORKSPACE` 环境变量。
