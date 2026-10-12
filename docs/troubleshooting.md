@@ -184,7 +184,7 @@ return Promise.resolve({
 **现象**（工作区在 `D:` 盘）：会话里所有 `pwsh` 调用失败，哪怕只有 `Get-Location`：
 
 ```text
-Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(D:\works\Kirara Server Project)
+Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(<工作区根>)
 ```
 
 而 `kirara_*` 十个工具完全正常 —— 它们走自己的子进程、**不经过沙箱**，所以那段时间反而是唯一

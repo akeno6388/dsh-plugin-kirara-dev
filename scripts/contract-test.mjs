@@ -97,8 +97,12 @@ const pluginUrl = pathToFileURL(join(pluginRoot, 'lib', 'index.js')).href;
 const plugin = await import(pluginUrl);
 check(typeof plugin.apply === 'function', `插件导出 apply()（name=${plugin.name}）`);
 
+// 工作区根（三端仓库的父目录）—— 相对本文件推导，**不含作者机器路径**。
+// pluginDir 是插件仓库根，插件按文档约定与三端仓库并列，所以上一级就是 workspace。
+// DSH_WORKSPACE 可覆盖（与插件自身的回退顺序一致）。
+const workspaceRoot = (process.env.DSH_WORKSPACE || '').trim() || dirname(pluginDir);
 const config = {
-  workspaceRoot: 'D:\\works\\Kirara Server Project',
+  workspaceRoot,
   buildTimeoutMs: 1200000,
   buildLogTailLines: 60,
 };

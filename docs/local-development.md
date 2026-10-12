@@ -19,7 +19,7 @@ DSH 的 desktop profile 由 Electron 独占，`dsh --profile desktop` 会被拒�
   "name": "dsh-profile-desktop",
   "private": true,
   "dependencies": {
-    "@kirara/dsh-plugin-kirara-dev": "file:D:/works/Kirara Server Project/dsh-plugin-kirara-dev"
+    "@kirara/dsh-plugin-kirara-dev": "file:<工作区根>/dsh-plugin-kirara-dev"
   },
   "dsh": {
     "profile": {
@@ -39,7 +39,7 @@ DSH 的 desktop profile 由 Electron 独占，`dsh --profile desktop` 会被拒�
 `file:` 会被 pnpm **拷贝**进 `profiles/desktop/node_modules/@kirara/…`，改完源码必须重新部署，
 否则 DSH 跑的仍是旧副本。
 
-想避免拷贝，可以把规格改成 `link:D:/works/Kirara Server Project/dsh-plugin-kirara-dev`：
+想避免拷贝，可以把规格改成 `link:<工作区根>/dsh-plugin-kirara-dev`：
 pnpm 会建符号链接，`app-boot` 的 `linkedProfileRoots()` 专门识别这种形态（`link:` 不复制，
 永远指向源码）。代价是每次启动都从源码目录加载，换之前先跑 `node scripts/mount-check.mjs`。
 
@@ -53,10 +53,10 @@ node scripts/deploy.mjs --disable   # 临时摘除（隔离插件排查时不必
 ### 2. 物化 profile 依赖树
 
 `profiles/desktop` 是 pnpm workspace（`nodeLinker: hoisted`），需要让 pnpm 把 bundle 铺到
-`profiles/desktop/node_modules`。DSH 自带 pnpm（系统 PATH 上没有），用 Node 跑它即可：
+`profiles/desktop/node_modules`。DSH 自带 pnpm（系统 PATH 上没有），用 Node 跑它即可 —— 把第一段换成本机 DSH 的安装目录：
 
 ```powershell
-node "C:\Users\90693\AppData\Local\Programs\DeepSeek Harness\resources\runtime\pnpm\bin\pnpm.cjs" `
+node "<DSH 安装目录>\resources\runtime\pnpm\bin\pnpm.cjs" `
   install --dir "$env:USERPROFILE\.dsh\profiles\desktop" --no-frozen-lockfile
 ```
 

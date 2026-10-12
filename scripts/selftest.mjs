@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const mod = await import(pluginPath);
 
@@ -23,8 +24,18 @@ console.log('inject  =', JSON.stringify(mod.inject));
 console.log('exports =', Object.keys(mod).join(', '));
 if (typeof mod.apply !== 'function') throw new Error('apply 不是函数 —— 插件契约不成立');
 
+/**
+ * 工作区根（三端仓库的父目录）—— 相对本文件推导，**不含作者机器路径**。
+ * 本文件在 <workspace>/dsh-plugin-kirara-dev/scripts/ 下，所以上两级就是 workspace，
+ * 与 cache-budget.mjs 的 WORKSPACE_ROOT 用同一套推导。
+ * 插件按文档约定与 kirara_server / kirara_-server-api / Kirara_Media 并列，
+ * 因此换机器、换克隆位置都不用改这里。DSH_WORKSPACE 可覆盖（与插件自身的回退顺序一致）。
+ */
+const workspaceRoot = (process.env.DSH_WORKSPACE || '').trim()
+  || fileURLToPath(new URL('../..', import.meta.url)).replace(/[\\/]+$/, '');
+
 // 配置用 Config 的默认值 + 覆盖，模拟 DSH 传参
-const config = { workspaceRoot: 'D:\\works\\Kirara Server Project', buildTimeoutMs: 1200000, buildLogTailLines: 60 };
+const config = { workspaceRoot, buildTimeoutMs: 1200000, buildLogTailLines: 60 };
 
 const registered = new Map();
 const ctx = {
