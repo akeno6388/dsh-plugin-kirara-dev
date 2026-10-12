@@ -448,8 +448,16 @@ node scripts\deploy.mjs                                 # 重新解析 main + �
 > `deploy.mjs` 还要能找到 pnpm：它在常见安装位置里搜，搜不到就得用 `DSH_PNPM` 显式指定。
 > 本机是 `…\product\d\node_modules\pnpm\bin\pnpm.cjs` —— 不在 `resources\runtime\` 下，所以自动搜不到。
 
-**若某次 `deploy` 没跟上新提交**：那是 pnpm 复用了 lockfile 里已经解析好的结果。删掉
-`pnpm-lock.yaml` 里 `@kirara/dsh-plugin-kirara-dev` 那两行再 deploy，就会强制重新解析 `main`。
+**⚠️ 跟 `main` 不等于每次 `deploy` 都会自动更新。** pnpm 以 lockfile 为准：只要那条解析结果还在，
+它就直接打印 `Lockfile is up to date, resolution step is skipped` 并复用旧 commit —— 实测从 `c870463`
+更新到 `c2da887` 时正是这样，连跑三次都没动。要真的重新解析 `main`：
+
+```powershell
+pnpm update @kirara/dsh-plugin-kirara-dev --dir "$env:DSH_HOME\profiles\$env:DSH_PROFILE"
+node scripts\deploy.mjs
+```
+
+或者直接删掉 `pnpm-lock.yaml` 全量重解析（其余依赖都钉了 SHA，结果仍然确定）。
 
 ## 常见问题
 
