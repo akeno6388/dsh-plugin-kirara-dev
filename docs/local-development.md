@@ -89,12 +89,13 @@ node scripts\mount-check.mjs       # 3) 挂载路径检查（内部串 contract-
 
 | 脚本 | 覆盖的失败面 | 是否走宿主真实代码 |
 | --- | --- | --- |
-| `selftest.mjs` | 工具**业务逻辑**：注册 + 逐个执行（含一次真实 `dotnet build`）、`mode=docs` 判定的三类反例、`needScreenshots` 兜底、`kirara_docsync` 的变化定性 | ✗ 假 `ctx.tools` |
+| `selftest.mjs` | 工具**业务逻辑**：注册 + 逐个执行（含一次真实 `dotnet build`）、`mode=docs` 判定的三类反例、`needScreenshots` 兜底、`kirara_docsync` 的变化定性、发布链路（三端 `release_notes` + `dryRun` 计划 + 一个**合成 git 仓库**钉住提交分类与去重规则） | ✗ 假 `ctx.tools` |
 | `deploy.mjs` | **部署形态**：profile 副本 == 源码、profile 里无宿主包副本 | ✗ 只做文件/清单断言 |
 | `mount-check.mjs` | **解析归层**：复现 `routeScoped` 的两锚点判定 + 清单形态 | ✗ 模拟判定 |
 | `contract-test.mjs` | **真实调度链路**：真 `cordis.Context` + 真 `ToolRuntime`，逐个 `prepare()` | ✓ 全真 |
 | `cache-budget.mjs` | **前缀缓存预算**：工具目录逐字节稳定 + 描述无易变内容 + 每个工具的返回值不超预算 | ✗ 假 `ctx.tools`（含一次假 `gradlew.bat` 真派发） |
 | `contract-test.mjs` 的 §6.5 | **可选键边界**：`artifact` / `screenshotReview` / `needScreenshots` 三类条件展开键，以及 `mode=docs` 的短路分支 | ✓ 全真 |
+| `contract-test.mjs` 的 §6.7 | **发布链路端到端**：临时仓库 + 假发布脚本，但真找产物、真改名、真搬目录、真算 SHA256、真写 `.sha256`；以及 README 门禁的拦下 / `force` 放行 / 提交后自动放行三段行为 | ✓ 全真 |
 
 ```powershell
 node scripts\deploy.mjs          # 部署最新源码到 profile + 校验不变量
@@ -116,13 +117,16 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 
 | 常量 | 值 | 实测 | 说明 |
 | --- | --- | --- | --- |
-| `toolSchemaBytes` | 6800 | 6496（8 个工具） | 7 个工具时 5061；`kirara_docsync` 与 `purpose`/`docs` 参数带来的一次性常驻增量 |
+| `toolSchemaBytes` | 9500 | 9061（10 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565 的一次性常驻增量 |
 | `docsRenderChars` | 4400 | 4014 | 宽泛关键词 + `maxHits=40` |
 | `buildRenderChars` | 5600 | 5124 | 200 行 × 400 字符的假构建日志 |
 | `startRenderChars` | 1400 | 1356 | 长需求 + `auto`（含 UI + 文档同步两条额外步骤） |
 | `verifyRenderChars` | 2000 | 1412 | `purpose=ui-design` + 截图，协议最长 |
 | `docsyncRenderChars` | 2500 | 1440 | 三端混合、4 篇目标 |
 | `narrativeHardCap` | 2400 | 2444（含截断说明） | `textBudgetChars` 默认值；原 1600，因为 UI 设计复核协议被截断即失效 |
+| `releaseNotesRenderChars` | 3600 | 3243 | `releaseNotesBudgetChars`（3200）+ 头部；取后端仓库这个最大区间 |
+| `releaseRenderChars` | 3400 | 450 | `releaseBudgetChars`（3000）+ 头部；`dryRun` 计划 |
+| `releaseNotesHardCap` / `releaseHardCap` | 3200 / 3000 | 3243 / 3044 | 这两个是有意做得比 `narrativeHardCap` 宽的：产出是提交清单与步骤表，压到 2400 会把「需人工判断」桶整个挤掉 |
 
 `kirara_start` 的 1400 只剩 44 字符余量：往 `steps` 里再加一条就会红。
 这是有意的 —— 流程说明每次调用都会重放进上下文，它是最该被盯住的一段。
@@ -138,16 +142,16 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
   ✓ TOOL_RUNTIME_SCHEDULER 可解析且带 prepare()
 === 3. 加载插件并 apply() ===
   ✓ apply(ctx, config) 未抛异常
-  ✓ 真实 ToolRuntime 里找到全部 8 个 kirara_* 定义
+  ✓ 真实 ToolRuntime 里找到全部 10 个 kirara_* 定义
 === 4. 真实调度器 prepare()（每个工具） ===
   ✓ kirara_start: prepare → dispatch      arguments = {"request":"…"}
   ✓ kirara_profile: prepare → dispatch    arguments = {}
   …
 === 5. presentCall() 视图形状 ===
-  ✓ 八个全部 card=generic / title 非空 / kind ∈ ToolCallKind
+  ✓ 十个全部 card=generic / title 非空 / kind ∈ ToolCallKind
 === 6. 完整链路 prepare → dispatch → finish（kirara_profile） ===
   ✓ 工具体执行成功（isError 非 true）
-=== 6.5 工具返回值 lossless JSON 边界（8 个工具真派发） ===
+=== 6.5 工具返回值 lossless JSON 边界（10 个工具真派发） ===
   ✓ 返回值可被宿主接受
   ✓ kirara_build 构建成功但无 APK: 返回值为 lossless JSON    exit=0、无产物 ⇒ artifact 必须省略而不是 undefined
   ✓ kirara_verify full 无截图（screenshotReview 必须整体省略）: 通过
@@ -155,6 +159,13 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
   ✓ lib/index.js 没有「显式赋 undefined」的返回字段
 === 6.6 端到端真构建 kirara_build api（可选，加 --live-build） ===
   ✓ 真实 api 构建经宿主返回      ✅ 构建成功 — api  (1.4s, exit=0)
+=== 6.7 发布链路端到端（假发布脚本 + 真实文件系统） ===
+  ✓ desktop 产物已按 _v<版本> 命名并落到输出目录   Kirara_Server_APP_Setup_x64_v1.6.6.exe
+  ✓ desktop 校验码是 sha256sum 格式（HASH *文件名）
+  ✓ README 本轮没更新过时：发布被门禁拦下
+  ✓ README 改动提交进本轮区间后自动放行（无需 force）
+  ✓ media 脚本没留校验码时由插件补写，不出现半成品
+  ✓ media 校验码与实际不符时判定失败
 === 7. 模块身份唯一性 ===
   ✓ profile 里没有 dsh-tools 副本        ✓ profile 的 @deepseek-ai/ 为空
 ```

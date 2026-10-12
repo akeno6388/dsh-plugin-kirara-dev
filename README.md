@@ -6,8 +6,8 @@
 > Kirara Dev Flow — route a request to the right projects, search the docs, run the real build,
 > then hand over a device-acceptance checklist.
 
-装好之后模型手里会多出八个 `kirara_*` 工具，覆盖「读文档 → 定路线 → 改代码 → 跑构建 → 出验收清单 →
-同步文档 → 收尾」这整条链路。它主要解决三件事：
+装好之后模型手里会多出十个 `kirara_*` 工具，覆盖「读文档 → 定路线 → 改代码 → 跑构建 → 出验收清单 →
+同步文档 → 发布 → 收尾」这整条链路。它主要解决四件事：
 
 - **文档太大，不能整篇读**。单篇技术文档最大 258 KB，`AGENTS.md` 有 153 KB，整篇塞进上下文会把它挤爆。
   插件改成按关键词检索，只取需要的片段。
@@ -16,6 +16,9 @@
 - **文档不会自己跟上代码**。新功能落地、BUG 修完，`docs/` 下的 md 就与代码出现偏差，而这个偏差是静默的 ——
   下一个会话读到的是过期事实。`kirara_docsync` 负责判断「这次改动该同步哪几篇、每篇改哪些章节」；
   反过来，纯文档改动（`mode=docs`）不参与编译，也就不该为它跑一次构建。
+- **发布是拼命令，而且出错之后改不回来**。三端的打包脚本、版本号来源、产物命名、校验码格式各不相同，
+  还要在发出去之前把新增功能写进给用户看的 README。`kirara_release` 把这些固化成工具：
+  产物统一按 `_v<版本>` 命名搬到桌面、生成 `sha256sum` 格式的校验文件、README 没跟上就直接拦下。
 
 ## 功能
 
@@ -28,6 +31,8 @@
 | `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部 |
 | `kirara_verify` | 产出分步的真机验收清单（步骤 + 预期结果）；传入截图路径可以额外拿到一段视觉复核协议，`purpose=ui-design` 时给的是「该怎么改」的 P0/P1 修改建议 |
 | `kirara_docsync` | **文档同步**。自行判断本轮改动属于新功能 / BUG 修复 / 界面改动 / 纯内部整理，产出该更新的文档清单（哪几篇 + 哪些章节 + 逐条清单） |
+| `kirara_release_notes` | **发布素材**。取「上个版本 tag → HEAD」的全部提交，按「新增功能 / 修复 / 内部整理 / 需人工判断」分好桶，并核验 README 是否跟上本轮 |
+| `kirara_release` | **发布**。跑仓库自带的发布脚本（api 走技术栈文档里的 docker 命令）打包，产物按 `_v<版本>` 命名搬到桌面，生成 SHA256 校验文件。`dryRun` 只出计划 |
 | `kirara_summary` | 汇总本轮变更、构建结论、验证状态、**已同步的文档**、遗留风险 |
 
 ### 自动判断这轮要不要实机验证
@@ -104,6 +109,83 @@ kirara_docsync({
 它只**判断与规划**，不替模型写文档 —— 真正的编辑仍由模型用 `write`/`edit` 完成。
 判定为 `chore` 时它会明确说「不需要改正文」，所以这不是一个「每次都必须改点什么」的负担。
 
+
+### 发布（`kirara_release`）
+
+发布是这个插件里**唯一有不可逆副作用**的动作：产物发出去之后改不回来。三端的发布现实各不相同，
+所以插件不发明统一流程，而是把每一端**已经在用的**那套固化下来：
+
+| 端 | 打包方式 | 版本号来源 | 递增 |
+| --- | --- | --- | --- |
+| desktop | 仓库自带的 `tools/publish_all.ps1`（编译出固定文件名的 Inno Setup 安装包） | `installer/Kirara_Server_Setup.iss` 与 `Kirara_Server-WinUI.csproj`，两处必须一致 | 不自动递增（重新打包当前版本） |
+| media | 仓库自带的 `tools/build_release.ps1 -Version <v>` | `app/build.gradle.kts` 的 `versionName` | 不自动递增 |
+| api | 技术栈文档 §13.0 的 `docker build` + `docker save` | 技术栈文档里最大的 `kirara-api:X.Y.Z` | **自动 +1（patch）** |
+
+发布前先取素材：
+
+```
+kirara_release_notes({ project: 'media' })   // 上个版本 tag → HEAD 的全部提交，按桶分好
+```
+
+它做的是**机械分桶**，不是替你写作：约定式前缀（`feat`）与「新增/支持/实现」进「新增功能」，
+「修复/修正/崩溃/失效」进「修复」，格式化与 lint 进「内部整理」，拿不准的一律进「需人工判断」。
+判定顺序是刻意的 —— **约定式前缀优先于关键词**，因为实测里有这样的提交标题：
+
+```text
+feat(应用内更新): 应用内 APK 下载/校验/安装，并修正互动预览（0.9.7-beta）
+```
+
+它同时含 `feat` 和「修正」。按关键词判会被丢进「修复」桶，于是这个功能在给用户看的 README 里
+凭空消失 —— 而这正是最不该发生的一类错误：漏掉的功能没人会去补。另外，区间内**重复的标题会被折叠**
+（合过分支的仓库里，同一条提交会经另一条父链再次进入历史；实测后端仓库 65 条里有 20 条是这种），
+折叠了几条会明说。
+
+拿到素材后写 README，再发布：
+
+```
+kirara_release({ project: 'media' })             // 真发布
+kirara_release({ project: 'api', dryRun: true }) // 只看计划，什么都不做
+```
+
+`dryRun` 会给出完整步骤表、解析出的版本号、以及**所有前置条件是否满足**。真发布时按端做这些事：
+
+- **desktop**：跑 `publish_all.ps1` → 在 `bin/installer` 里按正则找产物 → 复制并重命名为
+  `Kirara_Server_APP_Setup_x64_v<版本>.exe` → 落到桌面 → 生成同名 `.sha256`
+- **media**：跑 `build_release.ps1`（脚本自己就会输出到桌面并写好 `.sha256`）→ 插件**核验**产物
+  与校验码一致；脚本没留校验码就补写
+- **api**：`dotnet build` 预检 → `docker build -t kirara-api:<版本> -t kirara-api:latest .`
+  → `docker save` 两个 tag → 导出为 `kirara-api-<版本>.tar` 落到桌面 → 生成同名 `.sha256`
+
+三个细节是有意为之的：
+
+- **api 的 tar 必须同时含 `latest` tag**。`docker-compose.yml` 引用的是 `kirara-api:latest`，
+  只导出带版本号的 tag，部署方拉起来会发现镜像不存在。
+- **校验码是 `sha256sum` 格式**（`<hash> *<文件名>`，无 BOM）。有 BOM 时 `sha256sum -c` 直接解析
+  失败 —— 一个「有校验文件但验不了」的产物比没有校验文件更糟。
+- **media 的校验码不是照抄脚本给的**：脚本产出的哈希会被重新计算比对，对不上就判失败。
+  照单全收等于把校验这一步变成装饰。
+
+#### 发布前的 README 门禁
+
+用户看到的是 README，不是提交日志。所以发布前插件会检查每篇 README 是否跟上了本轮：
+
+| 判定 | 含义 | 结果 |
+| --- | --- | --- |
+| `ok` | 已含本版本号，或自上个版本以来被改动过 | 放行 |
+| `stale` | 明明白白写着**上一个**版本号 | **拦下** |
+| `unchanged` | 被 git 跟踪，但自上个版本以来一次都没改过 | **拦下** |
+| `missing` | 发布画像里列了却找不到文件 | **拦下** |
+| `unverifiable` | 既不写版本号，又没有可用的 git 证据 | 只提醒 |
+
+为什么需要 `unchanged` 这一级：desktop 与 media 的默认行为是**版本号不变、重新打包**，
+只靠「README 里有没有这个版本号」会平凡通过 —— 那个号可能上个迭代就写进去了，完全不能证明
+本轮的新增功能被写了进去。而「自上个版本以来 README 被改过没有」是不能平凡满足的证据，
+正好对上「发布前必须把新增功能写进 README」这条硬要求。反过来，从不写版本号的 README
+（`Kirara_Media` 就是）在证据不足时只提醒、不误拦 —— 一个永远拦人的门禁等于没有门禁，
+人只会习惯性加 `force`。
+
+拦下时 `force: true` 可以放行，但回传里会留下「已被 `force` 跳过」的痕迹，不会被静默吞掉。
+
 ### 内置的构建命令
 
 | 端 | 仓库目录 | 构建命令 |
@@ -125,7 +207,9 @@ kirara_docsync({
 | Kirara 三端仓库（至少你关心那一端） | 被编排的对象 |
 | .NET 10 SDK + WinUI 3 工作负载 | `kirara_build` 构建 desktop |
 | JDK 17 + Android SDK | `kirara_build` 构建 media |
-| 一个支持图像输入的 chat 模型路由 | `kirara_verify` 的截图复核。**UI 改动必须备**（不看图就别改样式）；非 UI 改动可以不备 |
+| Docker Desktop（且**正在运行**） | `kirara_release` 发布 api：`docker build` / `docker save` 都要它。没启动时发布会被前置检查拦下，而不是跑到一半失败 |
+| Inno Setup 6（`ISCC.exe`） | desktop 的发布脚本编译安装包 |
+| `Kirara_Media/keystore.properties` | media 的 release 签名。缺失时发布会被签名前置检查拦下 |
 
 只装插件、不备工具链也能用 `kirara_start` / `kirara_docs` / `kirara_route` / `kirara_docsync` 做路由、检索与文档同步。
 
@@ -187,7 +271,7 @@ md 不参与编译，也没有可验的东西。
 
 ### 直接调用单个工具
 
-跳过路由也可以，八个工具都能单独用：
+跳过路由也可以，十个工具都能单独用：
 
 ```
 kirara_profile({})                                 // 三端画像
@@ -197,6 +281,10 @@ kirara_docs({ keywords: ['评论'], project: 'api' }) // 限定单个子项目
 kirara_build({ project: 'media' })                 // 构建 Android 端
 kirara_verify({ summary: '设置页加暗色开关', project: 'media', mode: 'full' })
 kirara_docsync({ feature: '评论支持 @ 提醒', changes: ['kirara_-server-api/Controllers/CommentsController.cs'] })
+kirara_release_notes({ project: 'api' })            // 发布素材（后端没有版本 tag ⇒ 自动退回首提交）
+kirara_release_notes({ project: 'media', from: 'v0.9.6-beta' })  // 显式收窄区间
+kirara_release({ project: 'desktop', dryRun: true })  // 发布计划：步骤 + 版本号 + 前置条件
+kirara_release({ project: 'media' })                  // 真发布（跑脚本、搬桌面、写校验码）
 ```
 
 ### UI 改动必经截图复核
@@ -259,6 +347,12 @@ kirara_verify({
 | `textBudgetChars` | `2400` | 叙述型工具（start/route/profile/verify/summary）单次返回的字符总预算。原为 1600，抬高的原因是 UI 设计复核协议**要被原样执行**，截断即失效 |
 | `docsyncBudgetChars` | `2400` | `kirara_docsync` 单次返回的字符总预算 |
 | `docsyncMaxTargets` | `4` | `kirara_docsync` 最多推荐几篇文档 |
+| `releaseTimeoutMs` | `2400000` | `kirara_release` 单次发布最长等待（40 分钟；Gradle release 与 `docker save` 都慢） |
+| `releaseBudgetChars` | `3000` | `kirara_release` 单次返回的字符总预算（先保步骤表与校验码，再保日志尾部） |
+| `releaseNotesMaxCommits` | `40` | `kirara_release_notes` 每个桶最多**列出**几条提交（真实条数另附，不会被截断掩盖） |
+| `releaseNotesMaxFiles` | `25` | `kirara_release_notes` 最多列几个改动文件 |
+| `releaseNotesBudgetChars` | `3200` | `kirara_release_notes` 单次返回的字符总预算 |
+| `releaseOutputDir` | `''` | 发布产物落到哪个目录。留空 = 系统桌面（按 shell 的「桌面」文件夹解析，兼容 OneDrive 重定向） |
 
 ### 前缀缓存与上下文预算（为什么输出压得这么小）
 
@@ -288,9 +382,11 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 调大这些值等于主动换取更频繁的压缩与更低命中率 —— 真要调，请同时跑
 `node scripts/cache-budget.mjs` 并同步改里面的预算基线。
 
-工具目录本身也在预算内：8 个工具的 `name+description+parameters` 合计 **6496 字节**
-（7 个工具时是 5061；新增 `kirara_docsync` 与 `purpose`/`docs` 参数带来的一次性常驻增量）。
-这是一次性成本，换来的是「每轮都有人判断文档要不要跟上」，比事后返工便宜。基线卡在 6800 字节。
+工具目录本身也在预算内：10 个工具的 `name+description+parameters` 合计 **9061 字节**
+（8 个工具时是 6496；新增 `kirara_release` 与 `kirara_release_notes` 带来 +2565，是本插件迄今
+最大的一次目录增长）。这是**一次性常驻**成本（约 +640 token 的前缀），换来的是三端各自的发布现实
+被固化下来 —— 发布原本是「翻技术栈文档找命令 → 手改版本号 → 手动改名 → 手动搬桌面 → 手动算校验码
+→ 忘记写 README」，每一步都能出错，且出错时产物往往已经发出去了。基线卡在 9500 字节。
 
 ## 兼容性
 
@@ -363,6 +459,26 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 
 **桌面端构建报平台相关错误？**
 `Kirara_Server-WinUI.slnx` 只注册了 `x64`，必须显式传 `-p:Platform=x64`。
+
+**发布时提示 Docker 守护进程不可用？**
+`kirara_release` 发布 api 需要 Docker Desktop 在运行。插件在动手**之前**就会探测，探不到直接拦下
+并附上原始报错，不会让 `docker build` 跑到一半才失败（那时镜像层已经建了一半）。启动 Docker Desktop、
+等它就绪，再跑一次即可。
+
+**为什么 media 的发布要跑我仓库里的脚本，而不是插件自己打包？**
+因为签名配置、`versionCode` 自增、输出目录这些约定都在脚本里，插件重写一遍只会与脚本漂移。
+所以 media 走「脚本模式」：插件只负责传版本号、核验产物与校验码、确认文件名带 `_v<版本>`。
+desktop 同理走 `publish_all.ps1`，区别是它产出的安装包文件名固定不带版本号，所以 `_v` 后缀由插件补。
+
+**`kirara_release` 说 README 自上个版本以来没改过，怎么办？**
+这是发布门禁，不是故障。先用 `kirara_release_notes` 取「新增功能」桶，把本轮的**功能**
+（不含 BUG 修复）写进 README 并提交，再重新发布即可。确实不需要改 README 时用 `force: true`，
+但痕迹会留在回传里 —— 见[发布前的 README 门禁](#发布前的-readme-门禁)。
+
+**`kirara_release_notes` 在没有版本 tag 的仓库里怎么办？**
+它会退回仓库的首个提交，并在 `warnings` 里明说 —— 后端仓库（`kirara_-server-api`）就没有任何
+版本 tag。这种情况下区间会很大，提交多时会按标题折叠重复项、并按桶限量列出（**真实条数**写在每个桶
+的标题里，不会被截断掩盖）。用 `from` 显式收窄更省上下文。
 
 **为什么没有单元测试？**
 这是项目约定：验证方式 = 构建 + 人工真机清单。所以 `kirara_verify` 产出的是分步骤清单，不是测试代码。

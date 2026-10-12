@@ -11,7 +11,7 @@
  * 这个脚本做四件事：
  *   1. 用宿主安装目录那一份 `dsh-tools`（经模块拦截钩子，语义等同 app-boot 的
  *      `routeScoped`）构造**真实** cordis `Context` + **真实** `ToolRuntime`；
- *   2. 把插件 `apply()` 挂上去，逐个 `prepare()` 八个工具，证明调度器存在且可派发；
+ *   2. 把插件 `apply()` 挂上去，逐个 `prepare()` 十个工具，证明调度器存在且可派发；
  *   3. 对 `kirara_profile` 跑完整 `prepare → dispatch → finish`，证明结果真的产出；
  *   4. 断言「宿主作用域内不存在第二个物理副本」（模块身份唯一）。
  *
@@ -125,7 +125,7 @@ function lookup(name) {
   return undefined;
 }
 
-const TOOL_NAMES = ['kirara_start', 'kirara_profile', 'kirara_docs', 'kirara_route', 'kirara_build', 'kirara_verify', 'kirara_summary', 'kirara_docsync'];
+const TOOL_NAMES = ['kirara_start', 'kirara_profile', 'kirara_docs', 'kirara_route', 'kirara_build', 'kirara_verify', 'kirara_summary', 'kirara_docsync', 'kirara_release_notes', 'kirara_release'];
 const definitions = new Map();
 for (const name of TOOL_NAMES) {
   const def = lookup(name);
@@ -232,7 +232,7 @@ try {
 // 为什么之前没抓到：§6 只对 kirara_profile 跑了完整 dispatch，而 kirara_profile 的返回值
 // 恰好干净。夹具此前只检查 `prepare()` 的形状，从不检查**返回值**。
 // 这一节把 8 个工具全部真派发一次（临时空 root，毫秒级），外加 kirara_build 的两种退出码。
-console.log('\n=== 6.5 工具返回值 lossless JSON 边界（8 个工具真派发） ===');
+console.log('\n=== 6.5 工具返回值 lossless JSON 边界（10 个工具真派发） ===');
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { isJsonValue, snapshotJsonValue } = await import(pathToFileURL(join(hostRoot, '@deepseek-ai', 'dsh-util-values', 'lib', 'index.js')).href);
@@ -276,7 +276,8 @@ const inspectOutcome = (name, outcome) => {
 };
 
 try {
-  // (a) 8 个工具全覆盖。kirara_build 单独在 (b) 里测（它的 sampleArgs 会真跑 dotnet，必须换掉）。
+  // (a) 全部工具覆盖。kirara_build 单独在 (b) 里测（它的 sampleArgs 会真跑 dotnet，必须换掉），
+  //     kirara_release 的完整链路在 6.7 里测（sampleArgs 只给 project，没版本 ⇒ 走阻断分支）。
   for (const name of TOOL_NAMES) {
     if (name === 'kirara_build') continue;
     const outcome = await dispatchTool(name, sampleArgs(definitions.get(name)));
@@ -479,6 +480,158 @@ if (args.includes('--live-build')) {
   } else {
     ok('真实 api 构建经宿主返回', `${statusLine.slice(0, 96)}（${elapsed}）`);
   }
+}
+
+
+// ── 6.7 发布链路端到端（临时仓库 + 假发布脚本，不碰真实工具链） ───────────────
+// 为什么单独一节：kirara_release 的返回值里有四个**可选键**
+// （logTail / artifact / sha256 / checksumFile），正是历史事故里
+// 「写成 undefined ⇒ 整次调用被宿主拒收」的高发地带；而它真正做的事
+// （按版本改名 → 搬输出目录 → 流式算 SHA256 → 写 .sha256）完全不在 §6.5 的覆盖里。
+//
+// 夹具里发布脚本是假的，但**插件自己的每一步都是真的**：真读版本文件、真按正则找产物、
+// 真 Copy-Item、真流式计算 SHA256、真写校验码。真实 dotnet / gradle / docker 不进夹具 ——
+// 那是分钟级且会产出真实分发物的操作，属于「人拍板后执行」的范畴，不是夹具该做的。
+console.log('\n=== 6.7 发布链路端到端（假发布脚本 + 真实文件系统） ===');
+const { createHash } = await import('node:crypto');
+const releaseRoot = mkdtempSync(join(tmpdir(), 'kirara-release-'));
+const releaseOut = join(releaseRoot, 'out');
+mkdirSync(releaseOut, { recursive: true });
+const savedRootRel = config.workspaceRoot;
+config.workspaceRoot = releaseRoot;
+try {
+  // ── 夹具 1：desktop（collect 模式）—— 脚本产出固定名，_v 后缀与校验码由插件补 ──
+  const deskDir = join(releaseRoot, 'kirara_server');
+  mkdirSync(join(deskDir, 'installer'), { recursive: true });
+  mkdirSync(join(deskDir, 'tools'), { recursive: true });
+  writeFileSync(join(deskDir, 'installer', 'Kirara_Server_Setup.iss'), '#define MyAppVersion "1.6.6"\r\n');
+  writeFileSync(join(deskDir, 'Kirara_Server-WinUI.csproj'), '<Project><Version>1.6.6</Version></Project>\r\n');
+  writeFileSync(join(deskDir, 'README.md'), '# App\r\nversion-1.6.6\r\n');
+  writeFileSync(join(deskDir, 'README.en.md'), '# App\r\nversion-1.6.6\r\n');
+  writeFileSync(
+    join(deskDir, 'tools', 'publish_all.ps1'),
+    [
+      '$root = Split-Path -Parent $PSScriptRoot',
+      '$dir = Join-Path $root "bin\\installer"',
+      'New-Item -ItemType Directory -Path $dir -Force | Out-Null',
+      'Set-Content -LiteralPath (Join-Path $dir "Kirara_Server_APP_Setup_x64.exe") -Value "fake installer payload"',
+    ].join('\r\n'),
+  );
+
+  const out1 = await dispatchTool('kirara_release', { project: 'desktop', outputDir: releaseOut });
+  const p1 = inspectOutcome('kirara_release', out1);
+  check(p1 === undefined, 'desktop 发布：返回值可被宿主接受', p1 ?? 'isError=' + out1.finished?.isError);
+  const text1 = (out1.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
+  check(/发布完成/.test(text1), 'desktop 发布：判定为成功', text1.split('\n')[0]);
+
+  const artName = 'Kirara_Server_APP_Setup_x64_v1.6.6.exe';
+  const artPath = join(releaseOut, artName);
+  const shaPath = artPath + '.sha256';
+  check(existsSync(artPath), 'desktop 产物已按 _v<版本> 命名并落到输出目录', artName);
+  check(existsSync(shaPath), 'desktop 已生成 .sha256 校验文件', artName + '.sha256');
+  if (existsSync(artPath) && existsSync(shaPath)) {
+    const actual = createHash('sha256').update(readFileSync(artPath)).digest('hex');
+    const declared = (readFileSync(shaPath, 'utf8').match(/[0-9a-f]{64}/) ?? [''])[0];
+    check(declared === actual, 'desktop 校验码与产物实际 SHA256 一致', actual.slice(0, 24) + '…');
+    const body = readFileSync(shaPath, 'utf8');
+    check(
+      body.endsWith(' *' + artName + '\n') || body.endsWith(' *' + artName + '\r\n'),
+      'desktop 校验码是 sha256sum 格式（HASH *文件名）',
+      JSON.stringify(body.slice(-(artName.length + 4))),
+    );
+    check(!body.startsWith('\uFEFF'), 'desktop 校验码无 BOM（有 BOM 会让 sha256sum -c 解析失败）');
+  }
+  check(/SHA256: [0-9a-f]{64}/.test(text1), 'desktop 回传里带完整 SHA256');
+
+  // ── 夹具 2：README 门禁的三段行为 ──
+  // 先给夹具建 git 历史与基线 tag「1.6.5」，门禁才有可判定的证据 ——
+  // 「自上个版本以来 README 被改过没有」是唯一不能平凡满足的证据，正对上用户的硬要求。
+  const { spawnSync } = await import('node:child_process');
+  const gitDesk = (...gitArgs) => {
+    const r = spawnSync('git', gitArgs, { cwd: deskDir, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('git ' + gitArgs.join(' ') + ' 失败: ' + (r.stderr || r.stdout));
+    return (r.stdout || '').trim();
+  };
+  gitDesk('init');
+  gitDesk('config', 'user.name', 'fixture');
+  gitDesk('config', 'user.email', 'fixture@local');
+  gitDesk('config', 'commit.gpgsign', 'false');
+  gitDesk('add', '-A');
+  gitDesk('commit', '--no-verify', '-m', '上一个版本');
+  gitDesk('tag', '1.6.5');
+  writeFileSync(join(deskDir, 'Services.cs'), '// 本轮只改了代码，没动 README\n');
+  gitDesk('add', '-A');
+  gitDesk('commit', '--no-verify', '-m', '本轮只改了代码');
+
+  // 2a：README 还写着 1.6.5，且本轮一次都没提交过它 ⇒ 硬拦
+  writeFileSync(join(deskDir, 'README.md'), '# App\r\nversion-1.6.5\r\n');
+  writeFileSync(join(deskDir, 'README.en.md'), '# App\r\nversion-1.6.5\r\n');
+  const gated = await dispatchTool('kirara_release', { project: 'desktop', outputDir: releaseOut });
+  const gtext = (gated.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
+  check(gtext.includes('⛔'), 'README 本轮没更新过时：发布被门禁拦下', gtext.split('\n')[0]);
+  check(/README 自上个版本/.test(gtext), '门禁说明了「README 自上个版本以来没有任何改动」', '并对齐到 1.6.5 基线');
+  check(!/✅ 发布完成/.test(gtext), '被拦下时绝不能同时报成功');
+
+  // 2b：force 是可用的逃生口，但必须在回传里留痕（不能静默放行）
+  const forced = await dispatchTool('kirara_release', { project: 'desktop', outputDir: releaseOut, force: true });
+  const ftext = (forced.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
+  check(/发布完成/.test(ftext), 'force:true 可显式跳过 README 门禁并完成发布', ftext.split('\n')[0]);
+  check(/已被 force 跳过/.test(ftext), 'force 跳过门禁必须留下痕迹（不能静默放行）');
+
+  // 2c：把 README 的改动提交进本轮区间 ⇒ 门禁自动放行，不需要 force。
+  //     这一条才是用户要的闭环：写进 README 就能发，没写就发不了。
+  gitDesk('add', '-A');
+  gitDesk('commit', '--no-verify', '-m', 'docs: 把本轮新增功能写进 README');
+  const okAgain = await dispatchTool('kirara_release', { project: 'desktop', outputDir: releaseOut });
+  const okText = (okAgain.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
+  check(/发布完成/.test(okText), 'README 改动提交进本轮区间后自动放行（无需 force）', okText.split('\n')[0]);
+  check(!/已被 force 跳过/.test(okText), '正常放行时不该出现 force 痕迹');
+
+  // ── 夹具 3：media（script 模式）—— 脚本没写校验码时由插件补写 ──
+  const mediaDir = join(releaseRoot, 'Kirara_Media');
+  mkdirSync(join(mediaDir, 'app'), { recursive: true });
+  mkdirSync(join(mediaDir, 'tools'), { recursive: true });
+  writeFileSync(join(mediaDir, 'app', 'build.gradle.kts'), 'versionCode = 9\r\nversionName = "0.9.8-beta"\r\n');
+  writeFileSync(join(mediaDir, 'README.md'), '# Media\r\n## 功能特性\r\n');
+  writeFileSync(
+    join(mediaDir, 'keystore.properties'),
+    'storeFile=release.jks\r\nstorePassword=x\r\nkeyAlias=a\r\nkeyPassword=x\r\n',
+  );
+  const mediaScript = (extra) =>
+    [
+      'param([string]$Version, [string]$OutputDir)',
+      'New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null',
+      '$target = Join-Path $OutputDir ("Kirara_Media_v" + $Version + ".apk")',
+      'Set-Content -LiteralPath $target -Value "fake apk payload"',
+      ...extra,
+    ].join('\r\n');
+  writeFileSync(join(mediaDir, 'tools', 'build_release.ps1'), mediaScript([]));
+
+  const out3 = await dispatchTool('kirara_release', { project: 'media', outputDir: releaseOut });
+  const p3 = inspectOutcome('kirara_release', out3);
+  const text3 = (out3.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
+  check(p3 === undefined, 'media 发布：返回值可被宿主接受', p3 ?? 'isError=' + out3.finished?.isError);
+  check(/发布完成/.test(text3), 'media 发布：判定为成功', text3.split('\n')[0]);
+  const apkPath = join(releaseOut, 'Kirara_Media_v0.9.8-beta.apk');
+  check(existsSync(apkPath), 'media 产物落在输出目录', 'Kirara_Media_v0.9.8-beta.apk');
+  check(existsSync(apkPath + '.sha256'), 'media 脚本没留校验码时由插件补写，不出现半成品');
+  check(/无法核验/.test(text3), 'media 的 README 从不写版本号 ⇒ 只提醒、不误拦');
+
+  // ── 夹具 4：脚本写的校验码与实际不符 ⇒ 必须判失败，不能照单全收 ──
+  writeFileSync(
+    join(mediaDir, 'tools', 'build_release.ps1'),
+    mediaScript(['[System.IO.File]::WriteAllText($target + ".sha256", ("0" * 64) + " *x" + [char]10)']),
+  );
+  const out4 = await dispatchTool('kirara_release', { project: 'media', outputDir: releaseOut });
+  const p4 = inspectOutcome('kirara_release', out4);
+  const text4 = (out4.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
+  check(p4 === undefined, 'media 校验码不符：返回值仍是合法 JSON', p4 ?? 'ok');
+  check(/校验码不一致/.test(text4), 'media 校验码与实际不符时判定失败', text4.split('\n')[0]);
+} catch (error) {
+  bad('6.7 节自身抛异常', error?.stack?.split('\n').slice(0, 6).join('\n'));
+} finally {
+  config.workspaceRoot = savedRootRel;
+  rmSync(releaseRoot, { recursive: true, force: true });
 }
 
 // ── 7. 模块身份唯一性（事故根因守卫） ────────────────────────────────────────

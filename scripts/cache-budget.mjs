@@ -37,10 +37,16 @@ const WORKSPACE_ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(
  *     增量 = 新工具 969 + verify 的 purpose/截图描述 + summary 的 docs 参数 + start/route 的
  *     docs 模式枚举。这是**一次性常驻增量**（约 +500 token 的前缀），比每轮多跑一次
  *     「代码改了但没人更新文档」的返工便宜。卡在 6800 是为了抓回归 —— 描述重新写胖就会红。
+ *   2026-10-12 第三轮（新增发布链路 kirara_release + kirara_release_notes）：10 个工具 9061 字节。
+ *     增量 = 1479 + 1086 = 2565 字节（约 +640 token 的常驻前缀）。这是本插件迄今最大的一次
+ *     目录增长，值得说明为什么值：发布原本是「翻技术栈文档找命令 → 手改版本号 → 手动改名 →
+ *     手动搬桌面 → 手动算校验码 → 忘记写 README」，每一步都能出错且出错时产物已经发出去了；
+ *     把三端各自的发布现实（脚本 / 产物命名 / 校验码 / 前置条件 / README 门禁）固化成工具，
+ *     换掉的是一整类不可逆的事故。卡在 9500 是为了抓回归。
  */
 const BUDGET = {
-  /** 8 个工具的 name+description+parameters JSON 总字节上限。 */
-  toolSchemaBytes: 6800,
+  /** 10 个工具的 name+description+parameters JSON 总字节上限。 */
+  toolSchemaBytes: 9500,
   /** kirara_docs 单次 render 的字符上限（插件默认 docsBudgetChars=4000 + 截断提示）。 */
   docsRenderChars: 4400,
   /** kirara_build 单次 render 的字符上限（buildBudgetChars=5000 + 头部状态行）。 */
@@ -53,6 +59,14 @@ const BUDGET = {
   docsyncRenderChars: 2500,
   /** 叙述型工具（start/route/profile/verify/summary）的硬预算 textBudgetChars（2400，原 1600）。 */
   narrativeHardCap: 2400,
+  /** kirara_release_notes 单次 render 上限（releaseNotesBudgetChars=3200 + 头部）。 */
+  releaseNotesRenderChars: 3600,
+  /** kirara_release 单次 render 上限（releaseBudgetChars=3000 + 头部）。 */
+  releaseRenderChars: 3400,
+  /** kirara_release_notes 的硬预算（超过就要靠 clampText 截断，且必须说明被截断）。 */
+  releaseNotesHardCap: 3200,
+  /** kirara_release 的硬预算。 */
+  releaseHardCap: 3000,
 };
 
 /** 不应出现在 description/parameters 里的「每台机器/每次启动都不一样」的东西。 */
@@ -120,7 +134,7 @@ const firstLive = run1.live;
 const names = [...first.keys()].sort();
 console.log(`  已注册 ${names.length} 个工具：${names.join(', ')}`);
 
-const EXPECTED = ['kirara_build', 'kirara_docs', 'kirara_docsync', 'kirara_profile', 'kirara_route', 'kirara_start', 'kirara_summary', 'kirara_verify'];
+const EXPECTED = ['kirara_build', 'kirara_docs', 'kirara_docsync', 'kirara_profile', 'kirara_release', 'kirara_release_notes', 'kirara_route', 'kirara_start', 'kirara_summary', 'kirara_verify'];
 const missing = EXPECTED.filter((n) => !first.has(n));
 const extra = names.filter((n) => !EXPECTED.includes(n));
 if (missing.length || extra.length) {
@@ -204,6 +218,9 @@ const checks = [
   ['kirara_profile（三端全量）', 'kirara_profile', {}, 1200],
   ['kirara_route（full + 阻塞）', 'kirara_route', { request: '删除旧的评论表并重构为分表存储，需要改表结构', mode: 'full' }, 1500],
   ['kirara_summary', 'kirara_summary', { feature: 'x', mode: 'full', changes: ['a', 'b'], builds: ['c'], risks: ['d'] }, 800],
+  // 发布链路：notes 取最大区间（后端没有版本 tag ⇒ 退回首个提交，桶最多），release 走 dryRun 计划。
+  ['kirara_release_notes（api，无 tag ⇒ 区间最大）', 'kirara_release_notes', { project: 'api' }, BUDGET.releaseNotesRenderChars],
+  ['kirara_release（media，dryRun 计划）', 'kirara_release', { project: 'media', dryRun: true }, BUDGET.releaseRenderChars],
 ];
 for (const [label, name, args, budget] of checks) {
   if (!firstLive.has(name)) { bad(`${label}: 工具未注册`); continue; }
@@ -223,22 +240,28 @@ console.log('\n=== 4. 叙述型工具的硬预算（异常大入参也不许灌�
 {
   // kirara_summary 的入参完全由模型给：把 200 条变更塞进去，未设预算时 render 会到 ~10 KB。
   const huge = Array.from({ length: 200 }, (_, i) => `变更条目 ${i} —— `.padEnd(60, 'x'));
+  // 逐用例带上自己的硬预算：发布链路的两个工具是**故意**做得比其他叙述型工具宽
+  // （它们的产出是提交清单与步骤表，压到 2400 会把 ambiguous 桶整个挤掉），
+  // 所以不能共用 narrativeHardCap 那一把尺子。
   const cases = [
-    ['kirara_summary', { feature: 'x'.repeat(500), mode: 'full', changes: huge, builds: huge, risks: huge }],
-    ['kirara_route', { request: 'x'.repeat(4000), mode: 'full' }],
-    ['kirara_start', { request: 'x'.repeat(4000), mode: 'full' }],
-    ['kirara_verify', { summary: 'x'.repeat(4000), project: 'desktop', mode: 'full' }],
-    ['kirara_docsync', { feature: 'x'.repeat(4000), changes: huge }],
+    ['kirara_summary', { feature: 'x'.repeat(500), mode: 'full', changes: huge, builds: huge, risks: huge }, BUDGET.narrativeHardCap],
+    ['kirara_route', { request: 'x'.repeat(4000), mode: 'full' }, BUDGET.narrativeHardCap],
+    ['kirara_start', { request: 'x'.repeat(4000), mode: 'full' }, BUDGET.narrativeHardCap],
+    ['kirara_verify', { summary: 'x'.repeat(4000), project: 'desktop', mode: 'full' }, BUDGET.narrativeHardCap],
+    ['kirara_docsync', { feature: 'x'.repeat(4000), changes: huge }, BUDGET.narrativeHardCap],
+    // 版本号是这两个工具唯一能塞进超长自由文本的地方（其余入参都有 enum / 短语义）。
+    ['kirara_release_notes', { project: 'media', version: 'x'.repeat(4000) }, BUDGET.releaseNotesHardCap],
+    ['kirara_release', { project: 'media', version: 'x'.repeat(4000), dryRun: true }, BUDGET.releaseHardCap],
   ];
-  for (const [name, args] of cases) {
+  for (const [name, args, hardCap] of cases) {
     const { text } = await exec(firstLive, name, args);
-    const cap = BUDGET.narrativeHardCap + 200; // + 截断提示的固定开销
+    const cap = hardCap + 200; // + 截断提示的固定开销
     if (text.length > cap) {
-      bad(`${name}: 超大入参下 render ${text.length} 字符，超出硬预算 ${BUDGET.narrativeHardCap}(+提示)`);
+      bad(`${name}: 超大入参下 render ${text.length} 字符，超出硬预算 ${hardCap}(+提示)`);
     } else {
       ok(`${name}: 超大入参下 render ${text.length} ≤ ${cap} 字符`);
     }
-    if (text.length > BUDGET.narrativeHardCap && !/截断/.test(text)) {
+    if (text.length > hardCap && !/截断/.test(text)) {
       bad(`${name}: 被硬预算截断但没有说明`);
     }
   }

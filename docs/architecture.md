@@ -8,7 +8,7 @@
 dsh-plugin-kirara-dev/
 ├── package.json               # bundle 声明（dsh.bundle.patch）+ peerDependencies 契约
 ├── cordis.patch.yml           # insert 层，刻意不写任何与作者机器相关的字段
-├── lib/index.js               # 全部插件逻辑（8 个 kirara_* 工具）
+├── lib/index.js               # 全部插件逻辑（10 个 kirara_* 工具）
 ├── locale/{zh,en}.json        # 插件在插件列表里显示的名称与描述
 │                              #   （deploy.mjs 会逐字节比对这两个文件，漂移=列表显示旧文案）
 ├── scripts/                   # 开发期自检夹具，不进 profile
@@ -57,6 +57,7 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | `docs` | 该端相关的技术文档路径。`kirara_start` 按这个列表推荐要读的文档，`kirara_docsync` 把它当作「该同步哪些文档」的候选来源 —— 所以**只列真实存在的文件**，列了不存在的路径只会产出死链推荐 |
 | `constraints` | 该端的硬约束，会随 `kirara_profile` 一起返回 |
 | `apk` | 仅 media 有，构建产物路径，`kirara_build` 用它判断产物是否真的生成 |
+| `release` | 该端的发布现实：版本号从哪读、是否递增、跑哪个脚本、产物怎么命名、有哪些前置条件、哪几篇 README 要过门禁。细节见[发布链路](#发布链路kirara_release--kirara_release_notes) |
 
 三端的当前值：
 
@@ -205,6 +206,66 @@ docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
 抽 2-gram 是有意的：中文没有词边界，整句匹配永远命中不了标题；代价是偶尔出现
 「令牌登录 / 解绑令牌 / 重试失败」这类相关性一般的建议 —— 它是**给模型的提示**，
 不是必须照做的指令，所以宁滥勿缺。
+
+## 发布链路（`kirara_release` / `kirara_release_notes`）
+
+这是插件里唯一**有不可逆副作用**的一段，所以它的设计原则与其余工具相反：其余工具在「给模型信息」，
+这两个在「替模型做决定，而且做错了收不回来」。由此派生三条约束：
+
+1. **不发明流程，只固化各端已经在用的流程。** 打包口径写在 `PROJECTS[].release` 里，而不是散在
+   `execute` 里 —— 三端的发布现实（脚本路径、版本号来源、产物命名、前置条件）差异极大，
+   混在一起必然写成 if-else 泥潭。
+2. **动手之前先把所有前置条件查一遍。** docker 没起、`keystore.properties` 缺失、README 没跟上，
+   都要在跑构建 / 打包**之前**拦下 —— 失败发生在 `docker save` 之后，意味着磁盘上已经躺着
+   半个几 GB 的 tar 文件。
+3. **凡是有校验的地方都必须真校验。** 脚本给了校验码不算数，重新算一遍比对，对不上判失败。
+   照单全收等于把校验这一步变成装饰。
+
+### `PROJECTS[].release` 字段
+
+| 字段 | 含义 |
+| --- | --- |
+| `versionFrom` | 版本号从哪读。数组；每项 `{ file, re, pick? }`，`re` 的第 1 个捕获组即版本号。多个来源解析出的版本**不一致时判失败** —— desktop 的 `installer/Kirara_Server_Setup.iss` 与 `Kirara_Server-WinUI.csproj` 必须两处一致，不一致时打出来的包和显示的版本号就会是两回事 |
+| `bump` | `none`（重新打包当前版本）/ `patch` / `minor` / `major`。默认 `none`；api 是唯一默认 `patch` 的端，因为它没有版本文件，只能按文档里的最高版本 +1 |
+| `publish` | 跑哪个自带脚本。desktop 不需要额外参数；media 需要 `-Version` / `-OutputDir` 两个参数名 |
+| `package` | 产物怎么来、叫什么。`mode: 'collect'` = 脚本产出固定文件名，插件找出来改名；`mode: 'script'` = 脚本自己按 `_v<版本>` 输出到目标目录，插件只**核验**；`mode: 'docker-tar'` = api 的 `docker build` + `docker save` |
+| `preflight` | 前置条件：`docker`（守护进程可用）/ `file`（某个文件必须存在） |
+| `readme` | 给用户看的 README，发布门禁逐个检查。数组为空表示该端跳过这一步（api 就是） |
+
+### 版本号解析与递增
+
+`readProjectVersion()` 按 `versionFrom` 逐个读；`bumpVersion()` 的 `patch` 只动最后一段，
+`minor` / `major` 会把低位清零。**没有版本文件的端**（api）改成从技术栈文档里扫
+`kirara-api:X.Y.Z` 取最大值 —— 这是让「版本号只有一个来源」这个不变量在 api 端也成立的唯一办法。
+
+解析不出任何版本号时**不猜**：直接 `blocked`，要求显式传 `version`。
+
+### 提交分类（`kirara_release_notes`）
+
+`classifyCommit(subject)` 的顺序是刻意的：**约定式前缀优先于关键词**。反例是实测里真实存在的
+
+```text
+feat(应用内更新): 应用内 APK 下载/校验/安装，并修正互动预览（0.9.7-beta）
+```
+
+它同时含 `feat` 和「修正」。先看关键词就会把这条新增功能丢进「修复」桶，而「修复不写进 README」
+是硬规则 —— 于是这个功能在给用户看的文档里凭空消失，而且没人会去补。
+
+区间内标题重复的会被折叠（合过分支的仓库里，同一条提交会经另一条父链再次进入历史；实测后端仓库
+65 条里有 20 条是这种），折叠了几条在 `warnings` 里明说。每个桶的**真实条数**由 `counts` 单独给出，
+列表被限量截断时桶标题也会写明「仅列前 N 条」—— 否则读的人无法区分「真的只有 5 条」和「后面还有 30 条」。
+
+### 区间基线
+
+`from` 优先；否则取 HEAD 上**版本号最大**的 tag；都没有就退回首提交，并在 `warnings` 里明说。
+后端仓库（`kirara_-server-api`）没有任何版本 tag，所以它的区间是整段历史 —— 这种情况下
+显式传 `from` 比什么都管用。
+
+### README 门禁
+
+判定表见 [README「发布前的 README 门禁」](../README.md#发布前的-readme-门禁)。设计上只有一条原则：
+**证据不足时只提醒，不拦人**。一个在拿不到证据时也拦人的门禁，最后一定会被 `force` 绕过，
+而 `force` 用多了就等于没有门禁。硬拦只在证据明确且为负面时发生（`stale` / `unchanged` / `missing`）。
 
 ## 视觉复核链路
 

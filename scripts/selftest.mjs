@@ -8,6 +8,13 @@
 // 相对本文件定位插件入口：这样脚本搬目录 / 改仓库位置都不用跟着改路径。
 const pluginPath = new URL('../lib/index.js', import.meta.url).href;
 
+// 发布链路（§8/§9）要造一个**合成 git 仓库**才能钉住提交分类规则，
+// 所以这里需要起进程；仓库夹具是自建的临时目录，不碰宿主上的任何真实仓库。
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 const mod = await import(pluginPath);
 
 console.log('=== 模块导出 ===');
@@ -276,6 +283,139 @@ console.log('\n=== 6. kirara_summary ===');
 // 因此它“构建成功”并不能证明工具在 DSH 里可用 —— 2026-10-05 的
 // `tool "kirara_build" returned invalid output` 就是这样漏过去的：本地 exit=0，
 // 宿主却因返回值里的 undefined 整次拒收。返回值边界由 contract-test.mjs §6.5 负責。
+
+console.log('\n=== 8. kirara_release_notes（git → 新增功能，BUG/修复必须分出去） ===');
+{
+  // (a) 真实仓库：desktop 有 tag 1.6.5，区间应落在 tag 上而不是首个提交
+  const d = await call('kirara_release_notes', { project: 'desktop' });
+  console.log('[a] desktop -> from =', d.value.from, '(' + d.value.fromKind + ')',
+    '| 提交', d.value.commitCount, '| 计数', JSON.stringify(d.value.counts));
+  console.log('    README 门禁 =', JSON.stringify(d.value.readme.map((r) => r.rel + ':' + r.gate)));
+  console.log('    修复桶里有内容 =', d.value.fixes.length > 0, '| features 里混进修复 =',
+    d.value.features.some((f) => /修复|修正|bug/i.test(f.subject)));
+
+  // (b) media：4 条提交的窄区间，fixes 必须为空
+  const m = await call('kirara_release_notes', { project: 'media' });
+  console.log('[b] media   -> from =', m.value.from, '| 提交', m.value.commitCount,
+    '| 计数', JSON.stringify(m.value.counts));
+  // 关键回归：这条标题同时含 feat 与「修正」，必须按 feat 归到新增功能，不能当修复丢掉。
+  const trap = m.value.features.find((f) => /应用内更新/.test(f.subject));
+  console.log('    feat+修正陷阱 -> 归入 features =', Boolean(trap));
+  console.log('    fixes 桶         =', m.value.fixes.length, '（应为 0）');
+
+  // (c) api：没有任何版本 tag ⇒ 必须退回首个提交并**明确警示**，而不是静默给个空区间
+  const a = await call('kirara_release_notes', { project: 'api' });
+  console.log('[c] api     -> fromKind =', a.value.fromKind, '| 提交', a.value.commitCount,
+    '| 计数', JSON.stringify(a.value.counts));
+  console.log('    警示了 tag 缺失   =', a.value.warnings.some((w) => /没有任何版本 tag/.test(w)));
+  console.log('    折叠了重复提交   =', a.value.warnings.some((w) => /折叠/.test(w)));
+  console.log('    readme 为空(跳过) =', a.value.readme.length === 0);
+
+  // (d) 显式 from 必须能收窄区间（人拍板的入口）。顺带确认 enum 参数是被真校验的：
+  //     defineTool 会在 execute 之前把非法 project 直接拒掉，所以这里不用造「未知项目」用例。
+  const pinned = await call('kirara_release_notes', { project: 'api', from: '3e1143d' });
+  console.log('[d] 显式 from  -> fromKind =', pinned.value.fromKind, '| 提交', pinned.value.commitCount,
+    '（应远小于 44）');
+}
+
+console.log('\n=== 8.5 合成 git 仓库：提交分类与去重规则 ===');
+{
+  // 为什么自建仓库：真实仓库的提交内容会随时间变化，规则回归需要一个**可控**的输入。
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'kirara-notes-'));
+  const repo = join(fixtureRoot, 'Kirara_Media');
+  mkdirSync(join(repo, 'app'), { recursive: true });
+  writeFileSync(join(repo, 'app', 'build.gradle.kts'), 'versionCode = 9\nversionName = "0.9.8-beta"\n');
+  writeFileSync(join(repo, 'README.md'), '# Kirara_Media\n## 功能特性\n');
+  const git = (args) => {
+    const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error('git ' + args.join(' ') + ' 失败: ' + (r.stderr || r.stdout));
+    return (r.stdout || '').trim();
+  };
+  const commit = (subject) => git(['commit', '--allow-empty', '--no-verify', '-m', subject]);
+  git(['init']);
+  git(['config', 'user.name', 'fixture']);
+  git(['config', 'user.email', 'fixture@local']);
+  git(['config', 'commit.gpgsign', 'false']);
+  commit('初始提交');
+  git(['tag', 'v0.9.6-beta']);
+  commit('打底提交');
+  git(['tag', 'v0.9.7-beta']);
+  commit('feat(应用内更新): 应用内 APK 下载/校验/安装，并修正互动预览（0.9.7-beta）');
+  commit('新增扫码导入功能');
+  commit('新增扫码导入功能'); // 分支合并的同标题重复
+  commit('修复登录崩溃');
+  commit('更新README');
+  commit('perf: 压缩缓存');
+
+  const savedRoot = config.workspaceRoot;
+  config.workspaceRoot = fixtureRoot;
+  try {
+    const { value } = await call('kirara_release_notes', { project: 'media' });
+    console.log('from      =', value.from, '(' + value.fromKind + ')  （应 v0.9.7-beta / tag）');
+    console.log('commitCount =', value.commitCount, '（8 条提交 - 1 条已打 tag 之前 = 6，再去重 1 = 5）');
+    console.log('counts    =', JSON.stringify(value.counts),
+      '（应 {"features":2,"fixes":1,"internal":2,"ambiguous":0}）');
+    console.log('features  =', value.features.map((f) => f.subject.slice(0, 24)).join(' | '));
+    console.log('fixes     =', value.fixes.map((f) => f.subject).join(' | '));
+    console.log('折叠重复   =', value.warnings.some((w) => /折叠/.test(w)));
+
+    // 前置检查必须真的拦：夹具里没有 keystore.properties ⇒ media 的签名门禁先失败，
+    // 而不是等 gradle 跑一轮再报错。
+    const noKey = await call('kirara_release', { project: 'media', dryRun: true });
+    console.log('前置拦截  -> blocked =', noKey.value.blocked,
+      '| 命中签名缺失 =', noKey.value.blockers.some((b) => /keystore\.properties/.test(b)),
+      '| 未产出步骤 =', noKey.value.steps.length === 0);
+
+    writeFileSync(join(repo, 'keystore.properties'), 'storeFile=release.jks\nstorePassword=x\nkeyAlias=a\nkeyPassword=x\n');
+    // media 是 script 模式 ⇒ 两步（跑脚本 + 核验校验码），脚本自己负责桌面输出与 SHA256。
+    const dry = await call('kirara_release', { project: 'media', dryRun: true });
+    console.log('dryRun    -> blocked =', dry.value.blocked, '| 版本', dry.value.version,
+      '| 步骤 =', dry.value.steps.map((s) => s.id + ':' + s.status).join(', '));
+    // 该 README 从不写版本号 ⇒ 门禁必须只提醒、不阻断（永远拦人的门禁等于没有门禁）
+    console.log('            README 不写版本号时不拦截 =', !dry.value.blocked,
+      '| 有提醒 =', dry.value.warnings.some((w) => /无法核验/.test(w)));
+  } finally {
+    config.workspaceRoot = savedRoot;
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+console.log('\n=== 9. kirara_release（dryRun 计划 / 前置拦截） ===');
+{
+  const d = await call('kirara_release', { project: 'desktop', dryRun: true });
+  console.log('desktop -> blocked =', d.value.blocked, '| 版本', d.value.previousVersion, '→', d.value.version,
+    '(bump=' + d.value.bump + ')');
+  console.log('  步骤:', d.value.steps.map((s) => s.title).join(' / '));
+  console.log('  产物名带 _v 后缀 =', d.value.steps.some((s) => /_v\{?版本/.test(s.title) || /_v/.test(s.command)),
+    '| 有 SHA256 步骤 =', d.value.steps.some((s) => /SHA256/.test(s.title)));
+
+  const m = await call('kirara_release', { project: 'media', dryRun: true });
+  console.log('media   -> blocked =', m.value.blocked, '| 版本', m.value.version,
+    '| 步骤 =', m.value.steps.map((s) => s.id).join(', '));
+  console.log('  脚本参数含版本号 =', m.value.steps.some((s) => s.command.includes('-Version ' + m.value.version)));
+
+  const a = await call('kirara_release', { project: 'api', dryRun: true });
+  console.log('api     -> 版本', a.value.previousVersion, '→', a.value.version, '(bump=' + a.value.bump + ')');
+  console.log('  blocked =', a.value.blocked, '| blockers =', JSON.stringify(a.value.blockers.slice(0, 1)));
+
+  // 版本号显式覆盖必须生效（人拍板的入口）
+  const pinned = await call('kirara_release', { project: 'desktop', version: '9.9.9', dryRun: true });
+  console.log('显式 version -> ', pinned.value.version, '（应 9.9.9）');
+
+  // 输出必须是 lossless JSON：可选键（artifact / sha256 / checksumFile / logTail）必须整键省略
+  const walk = (x, path, out) => {
+    if (x === undefined) { out.push(path); return; }
+    if (x === null || typeof x !== 'object') return;
+    if (Array.isArray(x)) { x.forEach((v, i) => walk(v, path + '[' + i + ']', out)); return; }
+    for (const k of Object.keys(x)) walk(x[k], path + '.' + k, out);
+  };
+  for (const [label, v] of [['desktop', d.value], ['media', m.value], ['api', a.value]]) {
+    const bad = [];
+    walk(v, label, bad);
+    console.log('  ' + label + ' 返回值无 undefined =', bad.length === 0, bad.join(', '));
+  }
+}
+
 console.log('\n=== 7. kirara_build (真实构建 api 端) ===');
 try {
   const t0 = Date.now();

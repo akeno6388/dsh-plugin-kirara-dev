@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Kirara Dev Flow",
-    "description": "Orchestrates Kirara's three-repo development on DSH: read the docs, plan a route, build-verify, hand over a device checklist (screenshot review is mandatory for UI work), then sync the markdown docs."
+    "description": "Orchestrates Kirara's three-repo development on DSH: read the docs, plan a route, build-verify, hand over a device checklist (screenshot review is mandatory for UI work), sync the markdown docs, then package a release with each repo's own script — artefacts named _v<version> on the Desktop with a SHA256 checksum, gated on the new features being written into the README first."
   }
 }

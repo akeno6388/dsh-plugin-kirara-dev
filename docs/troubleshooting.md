@@ -5,19 +5,21 @@
 不要押在插件检查器上 —— 某些会话的工具表里根本没有 `cordis_inspect_*`。**验收要建立在会话自己
 能观察到的证据上**：
 
-1. 工具表里有 8 个 `kirara_*`：`kirara_start` / `kirara_profile` / `kirara_docs` / `kirara_route` /
-   `kirara_build` / `kirara_verify` / `kirara_docsync` / `kirara_summary`
+1. 工具表里有 10 个 `kirara_*`：`kirara_start` / `kirara_profile` / `kirara_docs` / `kirara_route` /
+   `kirara_build` / `kirara_verify` / `kirara_docsync` / `kirara_release_notes` / `kirara_release` /
+   `kirara_summary`
 2. **真调一次看返回值**：`kirara_profile({ project: 'desktop' })` 应给出正确的 `workspaceRoot` 与
    `buildLine`；`kirara_docs({ keywords: ['Kirara'] })` 应命中真实文档路径；
-   `kirara_docsync({ feature: '修复登录失败', changes: [] })` 应给出文档清单而不是报错
+   `kirara_docsync({ feature: '修复登录失败', changes: [] })` 应给出文档清单而不是报错；
+   `kirara_release({ project: 'desktop', dryRun: true })` 应给出步骤表而不是报错（**别用真发布验证**）
 3. **同一会话里内置 `read` / `pwsh` 正常** —— 下面那个「所有工具调用全崩」的事故里，
    它们是和 `kirara_*` 一起崩的
 
-工具**总数不是判据**。会话形态不同，工具数量会浮动，只要 `kirara_*` 八个齐全即为通过。
+工具**总数不是判据**。会话形态不同，工具数量会浮动，只要 `kirara_*` 十个齐全即为通过。
 
 ### 重启后的验收
 
-1. 工具表里八个 `kirara_*` 全部出现（不必数总数）
+1. 工具表里十个 `kirara_*` 全部出现（不必数总数）
 2. 在同一会话里调一次内置 `read` 或 `pwsh`；若 `pwsh` 只报
    `Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(<目录>)`，
    那是沙箱 ACL 的前置条件问题，与插件无关，见下文
@@ -159,8 +161,9 @@ return Promise.resolve({
 **加固后的守卫**：运行时显式补两种入参（无截图 / 带截图），断言协议段出现时机与 `screenshots`
 一致、正文不得出现 `undefined` 字样；静态审计正则放宽，补上「裸标识符后跟 `}` / `)`」这一形态。
 
-**后续增量（同一个坑的第三、第四个入口）**：`kirara_verify` 新增了 `needScreenshots`，
-`kirara_docsync` 新增了 `missing` —— 又都是「条件成立才有」的可选键。
+**后续增量（同一个坑的第三、四、五个入口）**：`kirara_verify` 新增了 `needScreenshots`，
+`kirara_docsync` 新增了 `missing`，发布链路又一口气加了四个（`logTail` / `artifact` / `sha256` /
+`checksumFile`）—— 全都是「条件成立才有」的可选键。
 所以 `contract-test.mjs` 的 §6.5 现在按参数组合逐条派发：
 
 | 入参 | 断言 |
@@ -170,6 +173,8 @@ return Promise.resolve({
 | `full` + 界面词 summary（不传 `purpose`） | `needScreenshots` **必须**出现（模型忘传 purpose 时的兜底） |
 | `mode=docs` | 走 `skipped`，两个可选键都不出现 |
 | `kirara_docsync` 在空文档 root 下 | `targets` 为空但 `missing` 非空，仍是合法 JSON |
+| `kirara_release` 在空 root 下（解析不出版本号） | 走 `blocked` 分支，四个可选键**一个都不出现** |
+| `kirara_release` 真发布（假发布脚本 + 临时目录） | `artifact` / `sha256` / `checksumFile` / `logTail` 全部出现，且产物、校验码与磁盘上的一致 |
 
 **可复用的结论**：每加一个「条件成立才有」的返回字段，就多一个 `undefined` 入口。
 加字段时同时把入参组合写进 §6.5 —— 「派发过了」不等于「覆盖到了」。
@@ -182,7 +187,7 @@ return Promise.resolve({
 Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(D:\works\Kirara Server Project)
 ```
 
-而 `kirara_*` 八个工具完全正常 —— 它们走自己的子进程、**不经过沙箱**，所以那段时间反而是唯一
+而 `kirara_*` 十个工具完全正常 —— 它们走自己的子进程、**不经过沙箱**，所以那段时间反而是唯一
 还能干活的工具。同一台机器上，工作区在 `C:` 用户目录的会话从不报这个错。
 
 **根因**（DSH 自带 `dsh-sandbox-windows-acl` 的文档原文）：
@@ -220,3 +225,62 @@ Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(D:\works\Kirara Server
 | `kirara_verify` 反复要求先给截图 | **不是故障**：UI 改动必经截图（`needScreenshots`），不看图就改样式等于盲改 | 截图后带 `purpose: 'ui-design'` 再调一次 |
 | `kirara_docsync` 推荐的文档打不开 | 规则命中了不存在的路径（`PROJECTS.docs` 里的死链） | 看返回里的 `missing` 字段，修 `PROJECTS[].docs` |
 | 工具 schema 字节数超了 `cache-budget` 基线 | 新增工具或把 description 写胖了 | 跑 `node scripts\cache-budget.mjs`，确认增量值得后再改 `BUDGET` |
+| `kirara_release` 发布 api 报「Docker 守护进程不可用」 | Docker Desktop 没在运行（探针读的是 `npipe:////./pipe/dockerDesktopLinuxEngine`） | 启动 Docker Desktop 等它就绪再跑。这是**发布前**的拦截，不是跑到一半失败 |
+| `kirara_release` 发布 media 报「keystore.properties 不存在」 | 签名配置缺失，gradle 跑到 release 变体才会报错 | 补上 `Kirara_Media/keystore.properties`（`storeFile` / `storePassword` / `keyAlias` / `keyPassword`） |
+| `kirara_release` 说「README 自上个版本以来没有任何改动」 | **不是故障**：发布门禁。desktop / media 默认不递增版本号，所以「README 里有这个版本号」不算证据 | 用 `kirara_release_notes` 取「新增功能」写进 README 并提交；确实不用改就 `force: true`（会留痕） |
+| `kirara_release` 说「README 未更新到本版本」 | README 里还写着**上一个**版本号，它明显在跟版本却没跟上 | 把 README 里的版本号与新增功能一起更新 |
+| `kirara_release_notes` 的区间大得离谱 | 该仓库没有任何版本 tag，退回了首个提交（后端仓库就是） | 用 `from` 显式收窄；或给发布打 tag |
+| `kirara_release` 报「脚本产出的校验码与实际不一致」 | 产物在写校验码之后又被改动，或脚本本身有问题 | 查 `tools/build_release.ps1`；**不要**改成照抄脚本给的哈希 |
+| `kirara_release` 报「找不到产物」 | 发布脚本改了输出文件名或目录，与 `PROJECTS[].release.package.from` 的正则对不上 | 改 `PROJECTS[].release.package.from`（正则 + 目录），别改工具逻辑 |
+
+## 事故五：发布链路开发中契约测试抓出来的两个 bug
+
+两个 bug 都**不会被自测发现**，都是 §6.7（发布链路端到端）第一次跑就红的。记在这里是因为
+它们的形态会重复出现。
+
+### 5.1 局部变量与闭包配置常量同名 ⇒ `Cannot access 'logTail' before initialization`
+
+现象：发布真的成功了 —— 产物改名、搬到输出目录、SHA256 也写对了 —— 但工具返回
+`isError=true`，报的是 TDZ。
+
+```js
+// apply() 闭包里已有：const logTail = config.buildLogTailLines ?? 25;
+execute(...) {
+  const logTail = log.trim()
+    ? clampText(tail(log.trim(), logTail) ...)   // ← 这里引用的 logTail 是它自己
+    : '';
+}
+```
+
+`const` 的初始化式里引用同名变量会命中暂时性死区，直接抛错。**写法上完全合法、eslint 未必报**，
+而且它只在「日志非空」这条分支上炸 —— 所以只用 dryRun（不产生日志）自测时一切正常。
+
+**修复**：局部变量改名（`releaseLogTail`），并在旁边写明为什么不能叫 `logTail`。
+
+**可复用的结论**：闭包里已经有 `x` 时，`execute` 内部不要再声明 `x`。
+这类 bug 的可观测面很窄（特定分支 + 返回阶段），只有**真派发 + 真产物**的夹具能稳定抓到。
+
+### 5.2 发布门禁的「平凡通过」
+
+第一版 README 门禁只认一个证据：README 里有没有本版本号。
+
+```js
+const gate = mentionsVersion ? 'ok' : mentionsPrevious ? 'stale' : 'unverifiable';
+```
+
+看起来没问题，实际上对 desktop / media **形同虚设** —— 这两端的默认行为是「版本号不变、重新打包」，
+于是 `version === previousVersion`，README 里那个号很可能上个迭代就写进去了，
+门禁照样放行。契约测试里「把 README 改回上一个版本号，发布应当被拦下」那条断言直接红了：
+工具返回的是 `✅ 发布完成`。
+
+**根因**：拿「字符串里出现过版本号」当作「本轮写了 README」的证据，而这两件事没有因果关系。
+
+**修复**：引入 git 证据 —— `git log <上个版本 tag>..HEAD -- <README>` 是否非空。
+「自上个版本以来 README 被改过没有」是不能平凡满足的。三级判定（`ok` / `stale` + `unchanged` /
+`unverifiable`）见 [架构与项目画像](architecture.md#readme-门禁)。
+
+**可复用的结论**：门禁 / 校验的价值取决于**它的证据能否被平凡满足**。
+写门禁时先问一句「不干活能不能过」，答案若是「能」，那它只是个装饰。
+反过来的边界也要留：证据**拿不到**时（未跟踪的 README、仓库没有 tag）只提醒不拦人 ——
+一个永远拦人的门禁，结局一定是被 `force` 绕过。
+
