@@ -99,7 +99,7 @@ $env:DSH_PNPM = 'C:\Users\<你>\EduWork-ECNU\resources\product\d\node_modules\pn
 依赖写成 commit SHA 时 pnpm 不需要解析 ref，直接下 codeload 压缩包；写成分支名（`#main`）时 pnpm 会先
 `git ls-remote`，而且会把地址规范化成 `git+ssh://git@github.com/…` —— 没配 SSH key 直接
 `Host key verification failed`。要在本机跟 `main`，先加这两条 git 配置（详见
-[README](../README.md) 安装一节的《选「钉 commit」还是「跟分支」》）：
+[README](../README.md) 安装一节的《跟 `main`：先掰掉 ssh》）：
 
 ```powershell
 git config --global --add 'url.https://github.com/.insteadOf' 'git+ssh://git@github.com/'

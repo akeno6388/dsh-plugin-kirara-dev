@@ -217,43 +217,49 @@ kirara_release({ project: 'api', dryRun: true }) // 只看计划，什么都不�
 
 ## 安装
 
-### 1. 添加插件
+插件通过 **DSH 插件管理**安装 —— 不需要手工编辑 profile 的 JSON：DSH 会把它写进
+`dsh.profile.bundles`，并用 pnpm 把依赖物化到 `profiles/<profile>/node_modules`。
 
-侧栏 **插件** → **添加插件**，填入仓库地址：
+GUI 入口：侧栏 **插件** → **添加插件** → 粘贴获取地址。
+命令行等价物：`dsh plugin --profile <profile> add <spec>`。
+
+### 1. 选获取方式
+
+只认下面四种写法，**推荐第 1 种**：
+
+| # | 写法 | 需要 git / SSH key | 适用场景 |
+| --- | --- | --- | --- |
+| 1 | `git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git#<40 位 commit sha>` | **不需要** —— pnpm 直接下 codeload 压缩包 | **推荐**：给别人的机器装，或要可复现的版本 |
+| 2 | `git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git#main` | 需要 —— 先 `git ls-remote` 解析「分支现在指向哪个 commit」 | 自己的机器，想一直跟最新 |
+| 3 | `file:<绝对路径>` / `link:<绝对路径>` | 不需要 | 本地开发，改完源码立刻生效 |
+| 4 | `@kirara/dsh-plugin-kirara-dev` | — | 发布到 npm 之后（尚未发布） |
+
+**推荐写法 —— 钉 commit：**
+
+```powershell
+git ls-remote https://github.com/akeno6388/dsh-plugin-kirara-dev.git refs/heads/main
+# 把回显里的 40 位 sha 填进下面这行
+```
 
 ```
-git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git
+git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git#<40 位 sha>
 ```
 
-也接受 `https://github.com/akeno6388/dsh-plugin-kirara-dev` 和本地绝对路径。
-命令行等价物是 `dsh plugin --profile <profile> add <spec>`。
+钉 commit 的好处：本机**不需要** git、也不需要 SSH key，而且同一串 sha 在任何机器上都得到同一份代码。
 
-#### 选「钉 commit」还是「跟分支」
+#### 跟 `main`：先掰掉 ssh
 
-插件地址有两种写法，代价完全不同：
+写分支名时，pnpm 会用 hosted-git-info 把 GitHub 地址规范化成 `git+ssh://git@github.com/…` ——
+**无论你写的是 `github:owner/repo` 简写还是完整的 `git+https://`**。没配 GitHub SSH key 的机器直接
+`Host key verification failed`。先加这两条 git 配置，把 ssh 掰回 https（前缀很窄，只匹配 pnpm 生成的
+这种 URL，不影响平时 `git@github.com:owner/repo` 的用法）：
 
-| 写法 | pnpm 怎么取代码 | 需要 SSH 吗 |
-| --- | --- | --- |
-| `git+https://…/dsh-plugin-kirara-dev.git#<commit-sha>` | commit 不用解析 ref，直接从 codeload 下压缩包 | **不需要** |
-| `git+https://…/dsh-plugin-kirara-dev.git#main`（或 `github:` 简写） | 先要 `git ls-remote` 解析「分支现在指向哪个 commit」 | **需要** |
+```powershell
+git config --global --add 'url.https://github.com/.insteadOf' 'git+ssh://git@github.com/'
+git config --global --add 'url.https://github.com/.insteadOf' 'ssh://git@github.com/'
+```
 
-写分支名时，pnpm 会用 hosted-git-info 把 GitHub 地址规范化成 `git+ssh://git@github.com/…`，
-**无论你写的是 `github:owner/repo` 简写还是完整的 `git+https://`** —— 没配 GitHub SSH key 的机器直接
-`Host key verification failed`。（旧版 README 写过「用 `git+https://` 就不会走 ssh」，那句话不准确：
-它只在**钉了 commit** 时才成立。）
-
-于是：
-
-- **想开箱即用** ⇒ 钉 commit SHA。DSH 插件管理默认就是这么写的。
-- **想一直跟 `main`** ⇒ 先把下面两条 git 配置加上，把 ssh 掰回 https。
-  前缀很窄，只匹配 pnpm 生成的这种 URL，不影响平时 `git@github.com:owner/repo` 的用法：
-
-  ```powershell
-  git config --global --add 'url.https://github.com/.insteadOf' 'git+ssh://git@github.com/'
-  git config --global --add 'url.https://github.com/.insteadOf' 'ssh://git@github.com/'
-  ```
-
-  ⚠️ 必须用 `--add`：同一个 key 写两次，第二次会**覆盖**第一次而不是并存。
+⚠️ 必须用 `--add`：同一个 key 写两次，第二次会**覆盖**第一次而不是并存。
 
 GitHub 的 443 时通时断，`git ls-remote` 偶发超时（实测同一条命令 2 秒通、21 秒超时都出现过），
 重试一次通常就好；长期不通再考虑换 Gitee 镜像地址。
@@ -261,6 +267,10 @@ GitHub 的 443 时通时断，`git ls-remote` 偶发超时（实测同一条命�
 ### 2. 启用
 
 安装完成界面点 **立即启用**，或回到插件列表打开该组合包的开关。
+
+**首次登记必须完全重启 DSH** —— 不是关窗口，也不是刷新页面：`dsh.profile.bundles` 只在启动时
+读一次，运行中的进程不会感知。重启后请**开新会话**验证（旧会话已经录下了旧版本的工具快照）。
+登记过之后，插件列表里的开关就是运行时的了 —— 打开 / 关掉当帧生效，不必再重启。
 
 ### 3. 指向你的仓库
 
@@ -274,6 +284,13 @@ GitHub 的 443 时通时断，`git ls-remote` 偶发超时（实测同一条命�
 ```
 
 配置是**整行替换**，没写的字段会回落到插件内置默认值。改完要**完全重启 DSH** —— bundle 只在启动时读一次。
+
+装完用 `kirara_profile({})` 验证：回传里的 `workspaceRoot` 与 `缺失目录` 会直接暴露指错的情况。
+
+### 4. 卸载
+
+在插件页移除该插件，DSH 会同时清掉 `dependencies` 与 `dsh.profile.bundles` 里的条目；
+之后**完全重启 DSH**。
 
 ## 使用
 
@@ -430,7 +447,7 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 
 - **固定版本（插件管理默认）** —— 在插件页卸载重装，或改 profile 清单里的 `#<commit-sha>` 再重装。
 - **一直跟 `main`（推荐给自己的仓库）** —— 依赖写成
-  `git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git#main`，并配好上一节《选「钉 commit」还是「跟分支」》里那两条 git 配置。
+  `git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git#main`，并配好上一节《跟 `main`：先掰掉 ssh》里那两条 git 配置。
 
 ```powershell
 Get-ChildItem "$env:DSH_HOME\profiles" -Directory | Select-Object -ExpandProperty Name   # 查真实 profile 名
