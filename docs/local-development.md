@@ -73,6 +73,42 @@ pnpm 会报 `Issues with peer dependencies found` —— 这是**预期**的，�
 可用环境变量覆盖：`DSH_HOME`（默认 `%USERPROFILE%\.dsh`）、`DSH_PROFILE`（默认 `desktop`）、
 `DSH_PNPM`（pnpm.cjs 绝对路径）。
 
+#### ⚠️ `DSH_PROFILE` 的默认值会骗你
+
+`DSH_PROFILE` 的默认值是 `desktop`，但**实际目录名不一定叫这个** —— 新版 DSH 的 profile 目录会带后缀，
+本机是 `desktop-017`。指错了目录，脚本不会报「目录不存在」，而是对着那个空目录跑完一整套校验，
+输出一堆「缺失 / 未登记 / package.json 缺失」—— 全是**假警报**，真正的问题只是看错了地方。
+
+```powershell
+Get-ChildItem "$env:DSH_HOME\profiles" -Directory | Select-Object -ExpandProperty Name
+$env:DSH_PROFILE = '<上一步查到的名字>'
+```
+
+#### ⚠️ pnpm 不一定在 `resources\runtime\` 下
+
+`findPnpm()` 只在 `%LOCALAPPDATA%`、`%LOCALAPPDATA%\Programs`、`C:\Program Files` 里
+搜名字匹配 `deepseek|dsh` 的目录，再拼 `resources\runtime\pnpm\bin\pnpm.cjs`。从源码目录跑的 DSH
+（例如本机的 `…\EduWork-ECNU\resources\product\d\`）**自动搜不到**，必须显式指定：
+
+```powershell
+$env:DSH_PNPM = 'C:\Users\<你>\EduWork-ECNU\resources\product\d\node_modules\pnpm\bin\pnpm.cjs'
+```
+
+#### ⚠️ `#main` 会走 SSH，GitHub 443 还会抖
+
+依赖写成 commit SHA 时 pnpm 不需要解析 ref，直接下 codeload 压缩包；写成分支名（`#main`）时 pnpm 会先
+`git ls-remote`，而且会把地址规范化成 `git+ssh://git@github.com/…` —— 没配 SSH key 直接
+`Host key verification failed`。要在本机跟 `main`，先加这两条 git 配置（详见
+[README](../README.md) 安装一节的《选「钉 commit」还是「跟分支」》）：
+
+```powershell
+git config --global --add 'url.https://github.com/.insteadOf' 'git+ssh://git@github.com/'
+git config --global --add 'url.https://github.com/.insteadOf' 'ssh://git@github.com/'
+```
+
+另外 GitHub 的 443 时通时断：实测**同一条** `git ls-remote` 2 秒通、21 秒超时都出现过。
+`deploy.mjs` 失败不一定是你配置错了，重试一次；连续失败再排查。
+
 ### 3. 生效
 
 ```

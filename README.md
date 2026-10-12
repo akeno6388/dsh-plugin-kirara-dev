@@ -228,10 +228,35 @@ git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git
 也接受 `https://github.com/akeno6388/dsh-plugin-kirara-dev` 和本地绝对路径。
 命令行等价物是 `dsh plugin --profile <profile> add <spec>`。
 
-用 `git+https://` 而不是 `github:owner/repo` 简写：pnpm 会把简写改写成 `git+ssh://`，
-没配 GitHub SSH key 的机器会直接 `Host key verification failed`。
+#### 选「钉 commit」还是「跟分支」
 
-如果 `github.com:443` 访问超时，可以换 Gitee 镜像地址。
+插件地址有两种写法，代价完全不同：
+
+| 写法 | pnpm 怎么取代码 | 需要 SSH 吗 |
+| --- | --- | --- |
+| `git+https://…/dsh-plugin-kirara-dev.git#<commit-sha>` | commit 不用解析 ref，直接从 codeload 下压缩包 | **不需要** |
+| `git+https://…/dsh-plugin-kirara-dev.git#main`（或 `github:` 简写） | 先要 `git ls-remote` 解析「分支现在指向哪个 commit」 | **需要** |
+
+写分支名时，pnpm 会用 hosted-git-info 把 GitHub 地址规范化成 `git+ssh://git@github.com/…`，
+**无论你写的是 `github:owner/repo` 简写还是完整的 `git+https://`** —— 没配 GitHub SSH key 的机器直接
+`Host key verification failed`。（旧版 README 写过「用 `git+https://` 就不会走 ssh」，那句话不准确：
+它只在**钉了 commit** 时才成立。）
+
+于是：
+
+- **想开箱即用** ⇒ 钉 commit SHA。DSH 插件管理默认就是这么写的。
+- **想一直跟 `main`** ⇒ 先把下面两条 git 配置加上，把 ssh 掰回 https。
+  前缀很窄，只匹配 pnpm 生成的这种 URL，不影响平时 `git@github.com:owner/repo` 的用法：
+
+  ```powershell
+  git config --global --add 'url.https://github.com/.insteadOf' 'git+ssh://git@github.com/'
+  git config --global --add 'url.https://github.com/.insteadOf' 'ssh://git@github.com/'
+  ```
+
+  ⚠️ 必须用 `--add`：同一个 key 写两次，第二次会**覆盖**第一次而不是并存。
+
+GitHub 的 443 时通时断，`git ls-remote` 偶发超时（实测同一条命令 2 秒通、21 秒超时都出现过），
+重试一次通常就好；长期不通再考虑换 Gitee 镜像地址。
 
 ### 2. 启用
 
@@ -400,7 +425,31 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 
 ## 升级
 
-插件暂不支持自动更新。先在插件页卸载，再用新地址重装一次。
+插件**没有自动更新**：DSH 把依赖写成 `git+…` 地址，**装上那一刻是什么就一直是那个**，
+上游有新提交也不会自己跟。两种更新方式：
+
+- **固定版本（插件管理默认）** —— 在插件页卸载重装，或改 profile 清单里的 `#<commit-sha>` 再重装。
+- **一直跟 `main`（推荐给自己的仓库）** —— 依赖写成
+  `git+https://github.com/akeno6388/dsh-plugin-kirara-dev.git#main`，并配好上一节《选「钉 commit」还是「跟分支」》里那两条 git 配置。
+
+```powershell
+Get-ChildItem "$env:DSH_HOME\profiles" -Directory | Select-Object -ExpandProperty Name   # 查真实 profile 名
+$env:DSH_PROFILE = 'desktop-017'                        # ← 填上一步查到的名字
+$env:DSH_PNPM    = '…\product\d\node_modules\pnpm\bin\pnpm.cjs'   # 只在自动找不到 pnpm 时需要
+node scripts\deploy.mjs                                 # 重新解析 main + 重装 + 校验不变量
+```
+
+改完必须**完全退出 DSH 再启动**，并且**开新会话** —— 旧会话里已经录下了旧版本的工具快照，不会自动修复。
+
+> **`DSH_PROFILE` 默认值是 `desktop`，但实际目录名不一定叫这个。** 新版 DSH 的 profile 目录可能带后缀
+> （本机是 `desktop-017`）。指错了，`deploy.mjs --check` 会报一堆「缺失 / 未登记」—— 那是**假警报**，
+> 它只是看了个根本不存在的目录。先用上面第一条命令确认实际名字。
+>
+> `deploy.mjs` 还要能找到 pnpm：它在常见安装位置里搜，搜不到就得用 `DSH_PNPM` 显式指定。
+> 本机是 `…\product\d\node_modules\pnpm\bin\pnpm.cjs` —— 不在 `resources\runtime\` 下，所以自动搜不到。
+
+**若某次 `deploy` 没跟上新提交**：那是 pnpm 复用了 lockfile 里已经解析好的结果。删掉
+`pnpm-lock.yaml` 里 `@kirara/dsh-plugin-kirara-dev` 那两行再 deploy，就会强制重新解析 `main`。
 
 ## 常见问题
 
@@ -421,6 +470,12 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 **装完在工具表里看不到 `kirara_*`？**
 先确认插件已启用，然后**完全退出 DSH 再重启** —— 不是关窗口，也不是刷新页面，bundle 只在启动时读一次。
 重启后请在**新会话**里验证：旧会话的历史消息里已经录下了加载失败时的工具快照，旧记录不会自动修复。
+
+**更新了插件，但工具还是旧的（比如没有 `kirara_release`）？**
+DSH 把依赖写成 `git+…` 地址，**装上那一刻是什么就一直是那个** —— 上游有新提交不会自己跟。
+另外 `deploy.mjs --check` 如果报「缺失 / 未登记」，先确认 `DSH_PROFILE` 指对了：它的默认值是 `desktop`，
+而实际目录名可能带后缀（本机是 `desktop-017`），指错了就会对着一个不存在的目录报一堆假警报。
+完整步骤见[升级](#升级)。
 
 **启用这个插件之后缓存命中率变低了吗？**
 这个问题被实测查过一遍（2026-10，探针脚本是工作区根目录 `.dsh-debug/cache-probe*.mjs`，
@@ -514,7 +569,7 @@ desktop 同理走 `publish_all.ps1`，区别是它产出的安装包文件名固
 
 ## 文档
 
-- [架构与项目画像](docs/architecture.md) —— 八个工具的实现、路由判定信号、文档同步规则、`PROJECTS` 常量怎么维护
+- [架构与项目画像](docs/architecture.md) —— 十个工具的实现、路由判定信号、文档同步规则、发布链路、`PROJECTS` 常量怎么维护
 - [DSH 插件契约](docs/plugin-contract.md) —— 插件要怎么写才会被 DSH 认可并加载
 - [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、五个自检夹具
 - [故障排查](docs/troubleshooting.md) —— 怎么判断插件加载了没，以及几个已经踩过的坑
