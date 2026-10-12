@@ -228,7 +228,7 @@ docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
 | `versionFrom` | 版本号从哪读。数组；每项 `{ file, re, pick? }`，`re` 的第 1 个捕获组即版本号。多个来源解析出的版本**不一致时判失败** —— desktop 的 `installer/Kirara_Server_Setup.iss` 与 `Kirara_Server-WinUI.csproj` 必须两处一致，不一致时打出来的包和显示的版本号就会是两回事 |
 | `bump` | `none`（重新打包当前版本）/ `patch` / `minor` / `major`。默认 `none`；api 是唯一默认 `patch` 的端，因为它没有版本文件，只能按文档里的最高版本 +1 |
 | `publish` | 跑哪个自带脚本。desktop 不需要额外参数；media 需要 `-Version` / `-OutputDir` 两个参数名 |
-| `package` | 产物怎么来、叫什么。`mode: 'collect'` = 脚本产出固定文件名，插件找出来改名；`mode: 'script'` = 脚本自己按 `_v<版本>` 输出到目标目录，插件只**核验**；`mode: 'docker-tar'` = api 的 `docker build` + `docker save` |
+| `package` | 产物怎么来、叫什么。`mode: 'collect'` = 脚本产出固定文件名，插件找出来改名；`mode: 'script'` = 脚本自己输出到目标目录，插件**核验**（规范名不存在时按 `from.re` + mtime 快照找出「本次新产生/被改写」的候选，唯一才改名、并同步改写校验码正文里的文件名；候选不唯一则拒绝猜测）；`mode: 'docker-tar'` = api 的 `docker build` + `docker save` |
 | `preflight` | 前置条件：`docker`（守护进程可用）/ `file`（某个文件必须存在） |
 | `readme` | 给用户看的 README，发布门禁逐个检查。数组为空表示该端跳过这一步（api 就是） |
 

@@ -275,6 +275,24 @@ const inspectOutcome = (name, outcome) => {
   return undefined; // 干净
 };
 
+/**
+ * 夹具里的文件写入要抗住 Windows 的偶发占用。
+ * 实测（2026-10）：刚建出来的文件偶尔会被杀毒/索引器短暂占住，writeFileSync 直接抛
+ * `UNKNOWN: unknown error, open '…'` —— 与代码无关，但会让整个夹具随机变红，
+ * 而随机的红等于没有红（人只会重跑一次然后不再相信它）。
+ */
+const writeStable = (path, data) => {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      writeFileSync(path, data);
+      return;
+    } catch (error) {
+      if (attempt >= 5) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60 * attempt);
+    }
+  }
+};
+
 try {
   // (a) 全部工具覆盖。kirara_build 单独在 (b) 里测（它的 sampleArgs 会真跑 dotnet，必须换掉），
   //     kirara_release 的完整链路在 6.7 里测（sampleArgs 只给 project，没版本 ⇒ 走阻断分支）。
@@ -291,7 +309,7 @@ try {
     [`build-ok-${0}`, 0, 'kirara_build 构建成功但无 APK'],
     [`build-fail-${3}`, 3, 'kirara_build 构建失败且无 APK'],
   ]) {
-    writeFileSync(join(fakeMedia, 'gradlew.bat'), `@echo off\r\nexit /b ${exitCode}\r\n`);
+    writeStable(join(fakeMedia, 'gradlew.bat'), `@echo off\r\nexit /b ${exitCode}\r\n`);
     const outcome = await dispatchTool('kirara_build', { project: 'media' });
     const problem = inspectOutcome('kirara_build', outcome);
     if (problem !== undefined) {
@@ -508,7 +526,7 @@ try {
   writeFileSync(join(deskDir, 'Kirara_Server-WinUI.csproj'), '<Project><Version>1.6.6</Version></Project>\r\n');
   writeFileSync(join(deskDir, 'README.md'), '# App\r\nversion-1.6.6\r\n');
   writeFileSync(join(deskDir, 'README.en.md'), '# App\r\nversion-1.6.6\r\n');
-  writeFileSync(
+  writeStable(
     join(deskDir, 'tools', 'publish_all.ps1'),
     [
       '$root = Split-Path -Parent $PSScriptRoot',
@@ -605,7 +623,7 @@ try {
       'Set-Content -LiteralPath $target -Value "fake apk payload"',
       ...extra,
     ].join('\r\n');
-  writeFileSync(join(mediaDir, 'tools', 'build_release.ps1'), mediaScript([]));
+  writeStable(join(mediaDir, 'tools', 'build_release.ps1'), mediaScript([]));
 
   const out3 = await dispatchTool('kirara_release', { project: 'media', outputDir: releaseOut });
   const p3 = inspectOutcome('kirara_release', out3);
@@ -618,7 +636,7 @@ try {
   check(/无法核验/.test(text3), 'media 的 README 从不写版本号 ⇒ 只提醒、不误拦');
 
   // ── 夹具 4：脚本写的校验码与实际不符 ⇒ 必须判失败，不能照单全收 ──
-  writeFileSync(
+  writeStable(
     join(mediaDir, 'tools', 'build_release.ps1'),
     mediaScript(['[System.IO.File]::WriteAllText($target + ".sha256", ("0" * 64) + " *x" + [char]10)']),
   );
@@ -627,6 +645,59 @@ try {
   const text4 = (out4.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
   check(p4 === undefined, 'media 校验码不符：返回值仍是合法 JSON', p4 ?? 'ok');
   check(/校验码不一致/.test(text4), 'media 校验码与实际不符时判定失败', text4.split('\n')[0]);
+
+  // ── 夹具 5：脚本产出的是**不带版本号**的名字 ⇒ 插件必须补 _v<版本> 后缀 ──
+  // 用户的原始要求里点名了这种可能（「如果脚本没有版本号名称输出规范就要按要求加后缀」）。
+  // 用一个干净的输出目录，否则夹具 3 留下的规范名会掩盖重命名这一步。
+  const releaseOut2 = join(releaseRoot, 'out2');
+  mkdirSync(releaseOut2, { recursive: true });
+  writeStable(
+    join(mediaDir, 'tools', 'build_release.ps1'),
+    [
+      'param([string]$Version, [string]$OutputDir)',
+      'New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null',
+      '$target = Join-Path $OutputDir "app-release.apk"',
+      'Set-Content -LiteralPath $target -Value "fake apk payload v2"',
+      '$h = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLower()',
+      '[System.IO.File]::WriteAllText($target + ".sha256", $h + " *app-release.apk" + [char]10)',
+    ].join('\r\n'),
+  );
+  const out5 = await dispatchTool('kirara_release', { project: 'media', outputDir: releaseOut2 });
+  const p5 = inspectOutcome('kirara_release', out5);
+  const text5 = (out5.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
+  check(p5 === undefined, 'media 脚本未按版本命名：返回值仍是合法 JSON', p5 ?? 'ok');
+  check(/发布完成/.test(text5), 'media 未按版本命名时仍能发布成功（补后缀而不是报错）', text5.split('\n')[0]);
+  check(/已补规范后缀/.test(text5), '补后缀这件事在回传里说明白了');
+  const renamedApk = join(releaseOut2, 'Kirara_Media_v0.9.8-beta.apk');
+  check(existsSync(renamedApk), '候选产物已被改名为 Kirara_Media_v0.9.8-beta.apk');
+  check(!existsSync(join(releaseOut2, 'app-release.apk')), '旧名字不残留（不至于桌面上一份产品两个名）');
+  if (existsSync(renamedApk)) {
+    const body5 = readFileSync(renamedApk + '.sha256', 'utf8');
+    const actual5 = createHash('sha256').update(readFileSync(renamedApk)).digest('hex');
+    check(body5.startsWith(actual5), '改名后校验码的哈希仍是实测值', actual5.slice(0, 24) + '…');
+    // 这一条是最容易漏的：sha256sum -c 靠 *文件名 找文件，正文不改写就永远验不过。
+    check(body5.includes(' *Kirara_Media_v0.9.8-beta.apk'), '改名后校验码正文里的文件名已同步（否则 sha256sum -c 永远验不过）', JSON.stringify(body5.trim()));
+  }
+
+  // ── 夹具 6：候选不止一个 ⇒ 必须拒绝猜测，而不是挑一个发出去 ──
+  const releaseOut3 = join(releaseRoot, 'out3');
+  mkdirSync(releaseOut3, { recursive: true });
+  writeStable(
+    join(mediaDir, 'tools', 'build_release.ps1'),
+    [
+      'param([string]$Version, [string]$OutputDir)',
+      'New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null',
+      'Set-Content -LiteralPath (Join-Path $OutputDir "a.apk") -Value "a"',
+      'Set-Content -LiteralPath (Join-Path $OutputDir "b.apk") -Value "b"',
+    ].join('\r\n'),
+  );
+  const out6 = await dispatchTool('kirara_release', { project: 'media', outputDir: releaseOut3 });
+  const p6 = inspectOutcome('kirara_release', out6);
+  const text6 = (out6.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
+  check(p6 === undefined, 'media 候选不唯一：返回值仍是合法 JSON', p6 ?? 'ok');
+  check(/无法判断哪个才是发布产物/.test(text6), '候选不唯一时拒绝猜测（拿不相干的文件发版比失败更糟）', text6.split('\n')[0]);
+  check(!existsSync(join(releaseOut3, 'Kirara_Media_v0.9.8-beta.apk')), '拒绝猜测时不产出任何规范名产物');
+
 } catch (error) {
   bad('6.7 节自身抛异常', error?.stack?.split('\n').slice(0, 6).join('\n'));
 } finally {

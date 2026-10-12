@@ -152,7 +152,9 @@ kirara_release({ project: 'api', dryRun: true }) // 只看计划，什么都不�
 - **desktop**：跑 `publish_all.ps1` → 在 `bin/installer` 里按正则找产物 → 复制并重命名为
   `Kirara_Server_APP_Setup_x64_v<版本>.exe` → 落到桌面 → 生成同名 `.sha256`
 - **media**：跑 `build_release.ps1`（脚本自己就会输出到桌面并写好 `.sha256`）→ 插件**核验**产物
-  与校验码一致；脚本没留校验码就补写
+  与校验码一致；脚本没留校验码就补写。**脚本没按版本号命名时，插件会补 `_v<版本>` 后缀** ——
+  找出本次新产生或被改写的候选产物，唯一才改名（同时改写校验码正文里的文件名，
+  否则 `sha256sum -c` 会永远验不过），候选不止一个就拒绝猜测
 - **api**：`dotnet build` 预检 → `docker build -t kirara-api:<版本> -t kirara-api:latest .`
   → `docker save` 两个 tag → 导出为 `kirara-api-<版本>.tar` 落到桌面 → 生成同名 `.sha256`
 
@@ -467,7 +469,8 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 
 **为什么 media 的发布要跑我仓库里的脚本，而不是插件自己打包？**
 因为签名配置、`versionCode` 自增、输出目录这些约定都在脚本里，插件重写一遍只会与脚本漂移。
-所以 media 走「脚本模式」：插件只负责传版本号、核验产物与校验码、确认文件名带 `_v<版本>`。
+所以 media 走「脚本模式」：插件只负责传版本号、核验产物与校验码、并把文件名规范到 `_v<版本>`
+（脚本已经这么命名就不动它；没有就补后缀；候选不唯一就拒绝猜测）。
 desktop 同理走 `publish_all.ps1`，区别是它产出的安装包文件名固定不带版本号，所以 `_v` 后缀由插件补。
 
 **`kirara_release` 说 README 自上个版本以来没改过，怎么办？**
