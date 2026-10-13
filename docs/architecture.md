@@ -23,6 +23,7 @@ dsh-plugin-kirara-dev/
 │   ├── contract-test.mjs
 │   ├── cache-budget.mjs       # 前缀缓存回归：工具目录逐字节稳定 + 返回值预算
 │   ├── update-e2e.mjs         # 自更新端到端（离线假 GitHub + 真 cordis + 真引导层）
+│   ├── update-live-check.mjs  # 自更新真实链路（联网打真 GitHub）
 │   ├── check-kernel-parity.mjs# lib/update.js 与另一个插件仓库是否逐字节一致
 │   ├── stamp.mjs              # 发版前写 BUNDLED_SHA
 │   └── host-interception.mjs

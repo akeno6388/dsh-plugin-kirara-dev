@@ -131,7 +131,7 @@ async function main() {
 
   const server = http.createServer((req, res) => {
     const url = req.url || '';
-    if (url.startsWith('/repos/') && url.includes('/commits/')) {
+    if (url.startsWith('/repos/') && url.includes('/commits')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ sha: FAKE_SHA, commit: { message: 'e2e: fake release v2', committer: { date: new Date().toISOString() } } }));
       return;
