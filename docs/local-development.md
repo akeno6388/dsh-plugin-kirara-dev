@@ -261,6 +261,7 @@ ok = true  exit = 0  duration = 2.3s
 | `locale/{zh,en}.json` | 重新部署（`deploy.mjs` 逐字节比对，漂移只会静默显示旧文案） |
 | 想验证本轮改动是否真的进了 profile | `node scripts/deploy.mjs --check`（有漂移 exit 1） |
 | 想验证自更新链路本身 | `node scripts/update-e2e.mjs`（离线，18 项断言）、`node scripts/update-live-check.mjs`（联网打真 GitHub）、`node scripts/check-kernel-parity.mjs`（两仓库内核一致） |
+| 想验证插件管理页里的控件 | `node scripts/client-panel-test.mjs`（无浏览器；`--dump` 直接打印会渲染出的 HTML） |
 
 **改完在任何会话里都建议先跑一遍三条夹具**：`selftest` 抓业务逻辑、`contract-test --from source` 抓真实
 调度链路、`cache-budget` 抓前缀缓存。三条都过再部署，能省掉一轮「重启 DSH 才发现又崩了」。

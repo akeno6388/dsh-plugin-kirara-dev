@@ -84,6 +84,7 @@ lib/build-info.js 发版印章（随包这一份对应哪个提交）
 ~~~powershell
 node scripts/update-e2e.mjs          # 离线端到端：假 GitHub + 真 cordis + 真引导层，18 项断言
 node scripts/update-live-check.mjs   # 联网打真 GitHub：验证真 codeload 产物能被解开并应用
+node scripts/client-panel-test.mjs   # 无浏览器验证详情页控件（伪造 __ModuleLoader__ + slots，react-dom/server 真渲染，--dump 看 HTML）
 node scripts/check-kernel-parity.mjs # 本仓库 lib/update.js 与另一个插件仓库是否逐字节一致
 node scripts/stamp.mjs               # 发版前写入 BUNDLED_SHA（--check 只校验）
 ~~~
