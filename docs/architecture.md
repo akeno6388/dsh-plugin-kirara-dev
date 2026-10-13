@@ -79,10 +79,13 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 
 ### 内置命令里刻意绕开的坑
 
-- **api 不构建 `.slnx`**：`Kirara_Server-API.slnx` 引用了不存在的 `test-assets/DbCheck/DbCheck.csproj`，
-  整解构建会以 `MSB3202` 在 0.8 秒内失败。改成构建 `Kirara_Server-API.Server` 单项目，
-  会带出 Core / Infrastructure / Shared。悬空引用修掉之后可以换回整解构建，同步改
-  `PROJECTS.api.build.args` 与 `constraints` 即可。
+- **api 只构建 `Server` 单项目**：`Kirara_Server-API.Server` 会带出 Core / Infrastructure / Shared，
+  实测 4.2 秒；整解 `Kirara_Server-API.slnx` 是 11 秒（还要算上 AppHost 与 `frontend.esproj`）。
+  内建命令按「够用且更快」选单项目 —— 这是选择，不是绕坑。
+  > **已修复的历史坑（2026-10）**：`Kirara_Server-API.slnx` 曾引用不存在的
+  > `test-assets/DbCheck/DbCheck.csproj`，整解构建以 `MSB3202` 在 0.8 秒内失败，这也是当初
+  > 改成单项目构建的起因。该悬空引用已删除（`kirara_server-api` 4db2275），整解现在可以构建成功；
+  > 相应地把这条「绕坑」说明与 `PROJECTS.api.constraints` 里的悬空引用条目一并去掉了。
 - **desktop 必须显式给平台**：`Kirara_Server-WinUI.slnx` 只注册了 `x64`，命令里固定带 `-p:Platform=x64`。
 - **media 不跑单元测试**：按项目约定只用 `gradlew.bat assembleDebug`。
 
@@ -339,13 +342,14 @@ feat(应用内更新): 应用内 APK 下载/校验/安装，并修正互动预�
 
 | 变化 | 要改哪里 |
 | --- | --- |
-| 某端构建方式 / TFM / 硬约束变了 | `lib/index.js` 的 `PROJECTS` |
+| 某端构建方式 / TFM / 硬约束变了 | `lib/impl.js` 的 `PROJECTS` |
 | 新增或调整关键词路由 | `ROUTE_SIGNALS` / `UI_HINTS` / `INTERACTION_SIGNALS` / `DESTRUCTIVE_SIGNALS` |
 | 新增或调整「纯文档变更」判定 | `DOC_TARGET` / `DOC_ACTION` / `DOC_STRUCTURE` / `DOC_CODE_OBJECT` |
 | 新增或调整「该同步哪几篇文档」 | `DOC_RULES`（规则表）与 `CHORE_SIGNALS` / `FIX_SIGNALS` / `FEATURE_SIGNALS`（定性） |
-| `.slnx` 悬空引用修好了 | `PROJECTS.api.build.args` 与 `constraints` |
 | 换了视觉复核模型 | `VISION_PROVIDER` / `VISION_MODEL` |
 | 改了任何工具的 description / 参数 / 输出预算 | `node scripts/cache-budget.mjs`，并把 `BUDGET` 基线一起改 |
 
-改完 `lib/index.js` 后需要 `node scripts/deploy.mjs` 同步到 profile 才会生效（`file:` 安装是拷贝，
-不是软链）。`cordis.patch.yml` 与 `package.json` 只在启动时读一次，改这两个必须完全重启 DSH。
+改完 `lib/impl.js`（实现层：工具、流程、`PROJECTS`）后需要同步一次才生效：插件详情页点「同步更新」
+（引导层热重载，不用重启），或 `node scripts/deploy.mjs` 重新部署 —— `file:` 安装是拷贝，不是软链。
+改 `lib/index.js`（引导层）/ `lib/update.js`（内核）/ `cordis.patch.yml` / `package.json`，
+则要重新部署并**完全重启 DSH**（这几个只在启动时读一次）。

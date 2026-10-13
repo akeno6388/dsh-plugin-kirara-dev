@@ -548,10 +548,11 @@ DSH 把依赖写成 `git+…` 地址，**装上那一刻是什么就一直是那
 按「安装」第 3 步覆盖配置，或者给 DSH 进程设置 `DSH_WORKSPACE` 环境变量。
 
 **`kirara_build` 构建 api 报 `MSB3202`？**
-那是构建整解 `.slnx` 才会踩的坑：`Kirara_Server-API.slnx` 引用了不存在的
-`test-assets/DbCheck/DbCheck.csproj`，整解构建会在 0.8 秒内失败。`kirara_build` 已经改成构建
-`Kirara_Server-API.Server` 单项目，会带出 Core / Infrastructure / Shared，绕开了这个引用。
-如果你在命令行里手动构建，也请构建单项目而不是整解。
+这是 2026-10 之前的老坑，**已经修掉了**：`Kirara_Server-API.slnx` 当时引用了不存在的
+`test-assets/DbCheck/DbCheck.csproj`，整解构建会在 0.8 秒内以 `MSB3202` 失败。该悬空引用已删除
+（`kirara_server-api` 4db2275），整解现在可以构建成功。
+`kirara_build` 仍然构建 `Kirara_Server-API.Server` 单项目：它带出 Core / Infrastructure / Shared，
+4.2 秒对整解的 11 秒，是刻意保留的选择而不是绕坑。命令行里手动构建，整解与单项目现在都可以用。
 
 **桌面端构建报平台相关错误？**
 `Kirara_Server-WinUI.slnx` 只注册了 `x64`，必须显式传 `-p:Platform=x64`。
