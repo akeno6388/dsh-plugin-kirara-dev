@@ -9,12 +9,13 @@
     ".": {
       "default": "./lib/index.js"
     },
+    "./client": "./lib/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
-    "lib/index.js",
+    "lib/",
     "cordis.patch.yml",
     "locale/*.json",
     "README.md"
@@ -23,6 +24,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [],
+      "immediately": true
     }
   },
   "engines": {

@@ -8,7 +8,12 @@
 dsh-plugin-kirara-dev/
 ├── package.json               # bundle 声明（dsh.bundle.patch）+ peerDependencies 契约
 ├── cordis.patch.yml           # insert 层，刻意不写任何与作者机器相关的字段
-├── lib/index.js               # 全部插件逻辑（10 个 kirara_* 工具）
+├── lib/                       # 宿主半边，四层（自更新见 docs/self-update.md）
+│   ├── index.js               #   引导层：挂实现 + 自更新路由 + 热重载（很薄）
+│   ├── impl.js                #   实现层：全部插件逻辑（10 个 kirara_* 工具）
+│   ├── update.js              #   自更新内核：查远端 / 下产物 / 解 tar.gz / 状态机 / 回滚
+│   ├── client.js              #   浏览器半边：插件详情页里的徽标 / 按钮 / 更新区段
+│   └── build-info.js          #   发版印章（随包这一份对应哪个提交，scripts/stamp.mjs 写）
 ├── locale/{zh,en}.json        # 插件在插件列表里显示的名称与描述
 │                              #   （deploy.mjs 会逐字节比对这两个文件，漂移=列表显示旧文案）
 ├── scripts/                   # 开发期自检夹具，不进 profile
@@ -17,6 +22,9 @@ dsh-plugin-kirara-dev/
 │   ├── mount-check.mjs
 │   ├── contract-test.mjs
 │   ├── cache-budget.mjs       # 前缀缓存回归：工具目录逐字节稳定 + 返回值预算
+│   ├── update-e2e.mjs         # 自更新端到端（离线假 GitHub + 真 cordis + 真引导层）
+│   ├── check-kernel-parity.mjs# lib/update.js 与另一个插件仓库是否逐字节一致
+│   ├── stamp.mjs              # 发版前写 BUNDLED_SHA
 │   └── host-interception.mjs
 └── docs/
 ```
@@ -37,12 +45,12 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 
 `scripts/cache-budget.mjs` 是这两条的机器化守卫，改 `description` 或任何输出预算后必跑。
 
-进 profile 的只有 `package.json`、`lib/index.js`、`cordis.patch.yml`，外加 npm 强制包含的 `README.md`
+进 profile 的是 `package.json`、整个 `lib/`、`cordis.patch.yml`，外加 npm 强制包含的 `README.md`
 （见 `package.json` 的 `files` 数组）。`scripts/`、`docs/` 和 `node_modules/` 都不进 profile。
 
 ## `PROJECTS`：项目事实的唯一来源
 
-`lib/index.js` 顶部的 `PROJECTS` 数组是三端项目事实的唯一来源。各端构建方式、TFM、硬约束变化时
+`lib/impl.js` 顶部的 `PROJECTS` 数组是三端项目事实的唯一来源。各端构建方式、TFM、硬约束变化时
 只改这里，不需要碰工具逻辑。
 
 每一端的字段：
@@ -63,8 +71,8 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 
 | 端 | 目录 | 技术栈 | 目标框架 |
 | --- | --- | --- | --- |
-| desktop | `kirara_server` | WinUI 3 (Windows App SDK 2.3.1) + C# 13 + .NET 10 + CommunityToolkit.Mvvm 8.4 + LiteDB | `net10.0-windows10.0.19041.0` |
-| api | `kirara_-server-api` | ASP.NET Core 10 + Aspire 13.2.4 + PostgreSQL 16 / EF Core 10 + Redis + MinIO + SignalR | — |
+| desktop | `Kirara_Server_Studio` | WinUI 3 (Windows App SDK 2.3.1) + C# 13 + .NET 10 + CommunityToolkit.Mvvm 8.4 + LiteDB | `net10.0-windows10.0.19041.0` |
+| api | `Kirara_Server-API` | ASP.NET Core 10 + Aspire 13.2.4 + PostgreSQL 16 / EF Core 10 + Redis + MinIO + SignalR | — |
 | media | `Kirara_Media` | Kotlin + Jetpack Compose + Hilt + OkHttp + Coil + kotlinx.serialization | — |
 
 ### 内置命令里刻意绕开的坑
@@ -163,8 +171,8 @@ docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
 
 ## 文档同步（`kirara_docsync`）
 
-为什么单独成节：`docs/` 下的 md 是**下一个会话的作业依据**（AGENTS.md 的约束、API 文档的端点表、
-需求文档的功能现状）。代码改了而文档没改，偏差是**静默的** —— 没人报错，但后来者会照着过期事实写代码。
+为什么单独成节：`docs/` 下的 md 是**下一个会话的作业依据**（技术栈文档的构建与硬约束、API 文档的端点表、
+需求现状）。代码改了而文档没改，偏差是**静默的** —— 没人报错，但后来者会照着过期事实写代码。
 
 ### 变化类型判定
 
@@ -188,10 +196,9 @@ docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
 | 规则 | 触发特征 | 目标文档 |
 | --- | --- | --- |
 | `api-surface` | 接口 / 端点 / api / controller / 鉴权 / jwt / signalr | api：`docs/Kirara Server API 完整文档.md` |
-| `stack` | 技术栈 / 依赖 / 框架 / 版本 / sdk / nuget / gradle / postgres / redis / minio | 各端技术栈文档 |
-| `requirement` | 需求 / 功能 / 交互 / 流程 / 界面 / 首页 / 评论 / 设置 / 登录 | desktop：`docs/需求文档.md`；media：技术栈文档 |
+| `stack` | 技术栈 / 依赖 / 框架 / 版本 / sdk / nuget / gradle / postgres / redis / minio，以及**约束 / 构建 / slnx / x64 / assemble / 权限 / 红线** | 各端技术栈文档（构建命令与硬约束的权威落点） |
+| `requirement` | 需求 / 功能 / 交互 / 流程 / 界面 / 首页 / 评论 / 设置 / 登录 | desktop：`docs/技术栈文档.md`（原 `需求文档.md` 已删除、内容并入其中）；media：技术栈文档 |
 | `readme` | 安装 / 用法 / 发版 / 版本号 / 下载 / apk / 部署 | 各端 `README.md` |
-| `agents` | 约束 / 构建命令 / 流程 / 规范 / 平台 / slnx / assemble | 各端 `AGENTS.md` |
 
 路径不存在的会被剔除，并在 `missing` 里报出来（不静默跳过）。一条规则都没命中时兜底到该端的
 主文档（README 除外 —— 它只在安装/用法变化时才是对的目标）。
@@ -258,7 +265,7 @@ feat(应用内更新): 应用内 APK 下载/校验/安装，并修正互动预�
 ### 区间基线
 
 `from` 优先；否则取 HEAD 上**版本号最大**的 tag；都没有就退回首提交，并在 `warnings` 里明说。
-后端仓库（`kirara_-server-api`）没有任何版本 tag，所以它的区间是整段历史 —— 这种情况下
+后端仓库（`Kirara_Server-API`）没有任何版本 tag，所以它的区间是整段历史 —— 这种情况下
 显式传 `from` 比什么都管用。
 
 ### README 门禁

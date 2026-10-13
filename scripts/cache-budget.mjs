@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const pluginPath = new URL('../lib/index.js', import.meta.url).href;
+const pluginPath = new URL('../lib/impl.js', import.meta.url).href;
 
 /**
  * 三端仓库的父目录 —— 也就是插件真正要吃的那棵树。
@@ -208,8 +208,8 @@ const checks = [
     {
       feature: '新增评论 @ 提醒 + 接口鉴权调整 + 发版说明',
       changes: [
-        'kirara_-server-api/Controllers/CommentsController.cs',
-        'kirara_server/Views/HomePage.xaml',
+        'Kirara_Server-API/Controllers/CommentsController.cs',
+        'Kirara_Server_Studio/Views/HomePage.xaml',
         'Kirara_Media/app/build.gradle.kts',
       ],
     },

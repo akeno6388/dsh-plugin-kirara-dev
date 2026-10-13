@@ -174,7 +174,7 @@ export function inspect() {
   //    locale/*.json 提供插件列表里的标题与描述，漂移了不会报错、只会静默显示旧文案，
   //    所以必须逐字节比。
   const mismatches = [];
-  for (const rel of ['package.json', 'lib/index.js', 'cordis.patch.yml', 'README.md', 'locale/en.json', 'locale/zh.json']) {
+  for (const rel of ['package.json', 'lib/index.js', 'lib/impl.js', 'lib/update.js', 'lib/build-info.js', 'lib/client.js', 'cordis.patch.yml', 'README.md', 'locale/en.json', 'locale/zh.json']) {
     const deployed = join(installedDir, rel);
     if (!existsSync(deployed)) {
       mismatches.push(`${rel} 缺失`);
@@ -206,12 +206,14 @@ export function inspect() {
     candidates.length ? `发现：${candidates.join(', ')}` : '全部候选都不存在 ⇒ 必然走宿主 runtime resolution',
   );
 
-  // 5) 副本是否已构建态可用（lib/index.js 存在且非空）
+  // 5) 副本是否可用：引导层 + 实现层都在（引导层很薄，所以只卡存在与非空；
+  //    实现层才是主体，这里顺带卡一个下限，避免部署出「空壳」）。
   const entry = join(installedDir, 'lib', 'index.js');
+  const impl = join(installedDir, 'lib', 'impl.js');
   check(
-    existsSync(entry) && statSync(entry).size > 1024,
-    '副本入口 lib/index.js 可用',
-    existsSync(entry) ? `${statSync(entry).size} B` : '缺失',
+    existsSync(entry) && statSync(entry).size > 512 && existsSync(impl) && statSync(impl).size > 1024,
+    '副本入口 lib/index.js + lib/impl.js 可用',
+    existsSync(entry) && existsSync(impl) ? `引导层 ${statSync(entry).size} B / 实现层 ${statSync(impl).size} B` : '缺失',
   );
 
   return result;

@@ -1,7 +1,7 @@
 # dsh-plugin-kirara-dev
 
 [DeepSeek Harness](https://github.com/deepseek-ai)（DSH）插件，把 Kirara 三端项目
-（`kirara_server` / `kirara_-server-api` / `Kirara_Media`）的开发流程做成模型可以直接调用的工具。
+（`Kirara_Server_Studio` / `Kirara_Server-API` / `Kirara_Media`）的开发流程做成模型可以直接调用的工具。
 
 > Kirara Dev Flow — route a request to the right projects, search the docs, run the real build,
 > then hand over a device-acceptance checklist.
@@ -9,7 +9,7 @@
 装好之后模型手里会多出十个 `kirara_*` 工具，覆盖「读文档 → 定路线 → 改代码 → 跑构建 → 出验收清单 →
 同步文档 → 发布 → 收尾」这整条链路。它主要解决四件事：
 
-- **文档太大，不能整篇读**。单篇技术文档最大 258 KB，`AGENTS.md` 有 153 KB，整篇塞进上下文会把它挤爆。
+- **文档太大，不能整篇读**。单篇技术文档最大 258 KB，整篇塞进上下文会把它挤爆。
   插件改成按关键词检索，只取需要的片段。
 - **三端构建命令各不相同，而且都有坑**。API 端的 `.slnx` 是坏的，桌面端必须显式指定平台，Android 端不跑单元测试。
   这些直接内置成工具，顺带把实测可用的命令固化下来。
@@ -25,7 +25,7 @@
 | 工具 | 说明 |
 | --- | --- |
 | `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题。`mode=auto` 会在 `docs` / `full` / `small` 之间判定 |
-| `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读 `AGENTS.md` |
+| `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读那些几百 KB 的技术文档 |
 | `kirara_docs` | 在技术文档里按关键词检索，返回 `文件:行号` 和所属章节 |
 | `kirara_route` | 把一句话需求展开成路线：涉及端、执行步骤、决策点 |
 | `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部 |
@@ -77,7 +77,7 @@
 ```
 kirara_docsync({
   feature: '评论支持 @ 提醒',
-  changes: ['kirara_-server-api/Controllers/CommentsController.cs', 'kirara_server/Views/HomePage.xaml'],
+  changes: ['Kirara_Server-API/Controllers/CommentsController.cs', 'Kirara_Server_Studio/Views/HomePage.xaml'],
 })
 ```
 
@@ -91,14 +91,14 @@ kirara_docsync({
 | `docs` | 文档动作 + 文档对象 | 本身就是文档工作 |
 | `chore` | 格式化 / lint / 重命名变量 / 清死代码 | 不要求改正文，更新记录留一条即可 |
 
-然后按「变化特征 → 文档」的规则表挑出该更新的文档（`docs/技术栈文档.md`、`Kirara Server API 完整文档.md`、
-`需求文档.md`、`README.md`、`AGENTS.md` …），并读那几篇文档的标题，给出**具体章节**与逐条清单：
+然后按「变化特征 → 文档」的规则表挑出该更新的文档（各端 `docs/` 下的技术栈文档、`Kirara Server API 完整文档.md`、
+`README.md` …），并读那几篇文档的标题，给出**具体章节**与逐条清单：
 
 ```text
 📄 文档同步 [ui] —— 需更新 2 篇
-判定: 界面/交互改动 —— 界面契约（入口、状态、主题）变了，需求/技术栈文档要跟上
+判定: 界面/交互改动 —— 界面契约（入口、状态、主题）变了，技术栈文档要跟上
 目标:
-  - kirara_-server-api/docs/Kirara Server API 完整文档.md
+  - Kirara_Server-API/docs/Kirara Server API 完整文档.md
       章节: 三、评论系统 API (/api/comments) / 3.4 获取评论列表（分页） / 更新记录
       为什么: 接口/鉴权行为变化 ⇒ API 完整文档的对应章节 + 「更新记录」
 清单:
@@ -192,8 +192,8 @@ kirara_release({ project: 'api', dryRun: true }) // 只看计划，什么都不�
 
 | 端 | 仓库目录 | 构建命令 |
 | --- | --- | --- |
-| desktop | `kirara_server` | `dotnet build Kirara_Server-WinUI.slnx -c Debug -p:Platform=x64 --nologo` |
-| api | `kirara_-server-api` | `dotnet build Kirara_Server-API.Server/Kirara_Server-API.Server.csproj -c Debug --nologo` |
+| desktop | `Kirara_Server_Studio` | `dotnet build Kirara_Server-WinUI.slnx -c Debug -p:Platform=x64 --nologo` |
+| api | `Kirara_Server-API` | `dotnet build Kirara_Server-API.Server/Kirara_Server-API.Server.csproj -c Debug --nologo` |
 | media | `Kirara_Media` | `gradlew.bat assembleDebug --console=plain` |
 
 `kirara_build` 在 DSH 宿主进程里执行，因此不受 PowerShell 沙箱的 stdio 限制，也不占用工具调用超时。
@@ -275,7 +275,8 @@ GitHub 的 443 时通时断，`git ls-remote` 偶发超时（实测同一条命�
 ### 3. 指向你的仓库
 
 插件按 `DSH_WORKSPACE` → 当前工作目录的顺序推测 Kirara 仓库根目录，也就是三端仓库的**父目录**。
-猜不中就在自己 profile 的 `cordis.patch.yml` 里按行 id 覆盖：
+⚠️ Electron 桌面端启动时当前工作目录常常是 **profile 目录**（如 `…/profiles/desktop-017`），这条回退基本猜不中，
+所以桌面端建议**显式配置** —— 在自己 profile 的 `cordis.patch.yml` 里按行 id 覆盖：
 
 ```yaml
 - id: kirara-dev
@@ -324,7 +325,7 @@ kirara_docs({ keywords: ['MinIO', '预签名'] })      // 跨文档检索
 kirara_docs({ keywords: ['评论'], project: 'api' }) // 限定单个子项目
 kirara_build({ project: 'media' })                 // 构建 Android 端
 kirara_verify({ summary: '设置页加暗色开关', project: 'media', mode: 'full' })
-kirara_docsync({ feature: '评论支持 @ 提醒', changes: ['kirara_-server-api/Controllers/CommentsController.cs'] })
+kirara_docsync({ feature: '评论支持 @ 提醒', changes: ['Kirara_Server-API/Controllers/CommentsController.cs'] })
 kirara_release_notes({ project: 'api' })            // 发布素材（后端没有版本 tag ⇒ 自动退回首提交）
 kirara_release_notes({ project: 'media', from: 'v0.9.6-beta' })  // 显式收窄区间
 kirara_release({ project: 'desktop', dryRun: true })  // 发布计划：步骤 + 版本号 + 前置条件
@@ -442,8 +443,21 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 
 ## 升级
 
-插件**没有自动更新**：DSH 把依赖写成 `git+…` 地址，**装上那一刻是什么就一直是那个**，
-上游有新提交也不会自己跟。两种更新方式：
+插件**支持在插件管理页里自更新**：进入本插件详情页 → 页头「同步更新」→
+从 GitHub 拉取最新提交、覆盖包目录、当场热重载，**不用重装、也不用重启 DSH**。
+原理、产物目录、配置项与边界见[自更新](docs/self-update.md)。
+
+- 启动后自动检查一次，之后每 6 小时一次（**只查不装**）；徽标会显示「有新版本 / 已是最新」；
+- 「检查更新」随时手动查；「同步更新」下载并热重载；「回滚到上一版」把包目录还原成同步前那一份；
+- 宿主半边（工具与流程）立刻生效；浏览器半边若自身有改动，刷新一次页面即可。
+
+> ⚠️ **从「单文件插件」升到这次的文件布局，需要完全退出 DSH 再启动一次**：
+> 入口从「整个实现在 `lib/index.js`」改成「引导层 `lib/index.js` + 实现层 `lib/impl.js`」，
+> 引导层必须是**启动时**被加载的那份。这次之后，再更新就都不需要重启了。
+
+### 手动更新（一般用不到）
+
+DSH 把依赖写成 `git+…` 地址，装上那一刻是什么就一直是那个 —— 想手动跟的话：
 
 - **固定版本（插件管理默认）** —— 在插件页卸载重装，或改 profile 清单里的 `#<commit-sha>` 再重装。
 - **一直跟 `main`（推荐给自己的仓库）** —— 依赖写成
@@ -559,7 +573,7 @@ desktop 同理走 `publish_all.ps1`，区别是它产出的安装包文件名固
 但痕迹会留在回传里 —— 见[发布前的 README 门禁](#发布前的-readme-门禁)。
 
 **`kirara_release_notes` 在没有版本 tag 的仓库里怎么办？**
-它会退回仓库的首个提交，并在 `warnings` 里明说 —— 后端仓库（`kirara_-server-api`）就没有任何
+它会退回仓库的首个提交，并在 `warnings` 里明说 —— 后端仓库（`Kirara_Server-API`）就没有任何
 版本 tag。这种情况下区间会很大，提交多时会按标题折叠重复项、并按桶限量列出（**真实条数**写在每个桶
 的标题里，不会被截断掩盖）。用 `from` 显式收窄更省上下文。
 

@@ -153,7 +153,7 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 
 | 常量 | 值 | 实测 | 说明 |
 | --- | --- | --- | --- |
-| `toolSchemaBytes` | 9500 | 9061（10 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565 的一次性常驻增量 |
+| `toolSchemaBytes` | 9500 | 9065（10 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565 的一次性常驻增量 |
 | `docsRenderChars` | 4400 | 4014 | 宽泛关键词 + `maxHits=40` |
 | `buildRenderChars` | 5600 | 5124 | 200 行 × 400 字符的假构建日志 |
 | `startRenderChars` | 1400 | 1356 | 长需求 + `auto`（含 UI + 文档同步两条额外步骤） |
@@ -192,7 +192,7 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
   ✓ kirara_build 构建成功但无 APK: 返回值为 lossless JSON    exit=0、无产物 ⇒ artifact 必须省略而不是 undefined
   ✓ kirara_verify full 无截图（screenshotReview 必须整体省略）: 通过
   ✓ kirara_start @ 提及类请求: 未降级为 small       mode=full
-  ✓ lib/index.js 没有「显式赋 undefined」的返回字段
+  ✓ lib/impl.js 没有「显式赋 undefined」的返回字段
 === 6.6 端到端真构建 kirara_build api（可选，加 --live-build） ===
   ✓ 真实 api 构建经宿主返回      ✅ 构建成功 — api  (1.4s, exit=0)
 === 6.7 发布链路端到端（假发布脚本 + 真实文件系统） ===
@@ -239,9 +239,9 @@ ok = true  exit = 0  duration = 2.3s
 | 1b | lockfile 不把宿主包当运行期依赖 | 锁文件是最终的安装意图，残留旧锁会诱导后来者把 `dependencies` 加回去 |
 | 1c | 插件清单：展示元信息可解析（`exports["./locale/*.json"]` + `locale/en.json`） | 这条最容易静默失效，DSH 只会「当作没有元信息」、列表回退显示原始包名，不报任何错 |
 | 2 | profile 的 `node_modules` 下没有 `@deepseek-ai` / `@standard-schema` 物理副本 | 模块身份唯一性的结构性兜底 |
-| 3 | profile 副本与源码**逐字节一致**（6 个文件：`package.json`、`lib/index.js`、`cordis.patch.yml`、`README.md`、`locale/*.json`） | `file:` 安装是**拷贝**，不是软链 |
+| 3 | profile 副本与源码**逐字节一致**（10 个文件：`package.json`、`lib/{index,impl,update,client,build-info}.js`、`cordis.patch.yml`、`README.md`、`locale/*.json`） | `file:` 安装是**拷贝**，不是软链 |
 | 4 | 从副本入口 `require.resolve.paths()` 扫不到任何宿主包候选 | 运行时解析路径必须落在宿主侧 |
-| 5 | 副本入口 `lib/index.js` 存在且 > 1024 B | 防「假装部署成功」的空文件 |
+| 5 | 副本 `lib/index.js`（引导层）存在且 > 512 B、`lib/impl.js`（实现层）> 1024 B | 防「假装部署成功」的空文件或空壳 |
 
 任一项失败 ⇒ exit 1。
 
@@ -252,12 +252,15 @@ ok = true  exit = 0  duration = 2.3s
 
 | 改了什么 | 怎么生效 |
 | --- | --- |
-| `lib/index.js` | `node scripts/deploy.mjs` 重新部署（`file:` 是拷贝，pnpm 不会自动重建副本） |
+| `lib/impl.js`（实现层：工具、流程、`PROJECTS`） | **在插件详情页点「同步更新」**（或 `node scripts/deploy.mjs` 重新部署）—— 引导层会热重载它，不需要重启 DSH |
+| `lib/index.js`（引导层）/ `lib/update.js`（内核） | `node scripts/deploy.mjs` 重新部署 + **完全重启 DSH**（引导层必须是启动时加载的那份） |
 | `cordis.patch.yml` / `package.json` | 重新部署 + **完全重启 DSH**（这两个只在启动时读一次） |
-| `PROJECTS` / `SAFETY_RULES` | 同 `lib/index.js` |
+| `lib/client.js`（浏览器半边） | 同步更新/重新部署后**刷新一次页面** |
+| `PROJECTS` / `SAFETY_RULES` | 同 `lib/impl.js` |
 | 任一工具的 description / 参数 / 输出预算 | 先跑 `node scripts/cache-budget.mjs`，同步 `BUDGET` 基线，再部署 |
 | `locale/{zh,en}.json` | 重新部署（`deploy.mjs` 逐字节比对，漂移只会静默显示旧文案） |
 | 想验证本轮改动是否真的进了 profile | `node scripts/deploy.mjs --check`（有漂移 exit 1） |
+| 想验证自更新链路本身 | `node scripts/update-e2e.mjs`（离线，18 项断言）+ `node scripts/check-kernel-parity.mjs` |
 
 **改完在任何会话里都建议先跑一遍三条夹具**：`selftest` 抓业务逻辑、`contract-test --from source` 抓真实
 调度链路、`cache-budget` 抓前缀缓存。三条都过再部署，能省掉一轮「重启 DSH 才发现又崩了」。

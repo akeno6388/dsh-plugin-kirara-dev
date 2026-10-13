@@ -50,12 +50,12 @@ const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
 const profileDir = join(dshHome, 'profiles', process.env.DSH_PROFILE || 'desktop');
 const deployedDir = join(profileDir, 'node_modules', '@kirara', 'dsh-plugin-kirara-dev');
 const wantSource = args.includes('--from') && flagValue('--from') === 'source';
-const useDeployed = !wantSource && existsSync(join(deployedDir, 'lib', 'index.js'));
+const useDeployed = !wantSource && existsSync(join(deployedDir, 'lib', 'impl.js'));
 const pluginRoot = useDeployed ? deployedDir : pluginDir;
 
 const hostRoot = flagValue('--host') ?? process.env.DSH_HOST_NODE_MODULES ?? join(pluginDir, 'node_modules');
 console.log('=== 被测对象 ===');
-console.log(`  插件入口 : ${join(pluginRoot, 'lib', 'index.js')}（${useDeployed ? 'profile 已部署副本' : '源码树'}）`);
+console.log(`  插件入口 : ${join(pluginRoot, 'lib', 'impl.js')}（${useDeployed ? 'profile 已部署副本' : '源码树'}）`);
 console.log(`  宿主包目录: ${hostRoot}`);
 
 if (!existsSync(join(hostRoot, '@deepseek-ai', 'dsh-tools', 'package.json'))) {
@@ -93,7 +93,7 @@ check(scheduler !== undefined && typeof scheduler.prepare === 'function', 'TOOL_
 
 // ── 3. 加载插件并 apply ─────────────────────────────────────────────────────
 console.log('\n=== 3. 加载插件并 apply() ===');
-const pluginUrl = pathToFileURL(join(pluginRoot, 'lib', 'index.js')).href;
+const pluginUrl = pathToFileURL(join(pluginRoot, 'lib', 'impl.js')).href;
 const plugin = await import(pluginUrl);
 check(typeof plugin.apply === 'function', `插件导出 apply()（name=${plugin.name}）`);
 
@@ -384,7 +384,7 @@ try {
   //      （needScreenshots 之外的第二处 lossless 风险面）。临时 root 下没有文档 ⇒
   //      targets 为空、missing 非空，正好覆盖「规则指向的文档不存在」这条分支。
   for (const [title, docsyncArgs] of [
-    ['kirara_docsync 无文档的 root（targets 空 + missing 非空）', { feature: '契约测试：新增评论功能', changes: ['kirara_-server-api/Controllers/CommentsController.cs'] }],
+    ['kirara_docsync 无文档的 root（targets 空 + missing 非空）', { feature: '契约测试：新增评论功能', changes: ['Kirara_Server-API/Controllers/CommentsController.cs'] }],
     ['kirara_docsync chore（required=false 分支）', { feature: '格式化代码', kind: 'chore' }],
   ]) {
     const outcome = await dispatchTool('kirara_docsync', docsyncArgs);
@@ -460,7 +460,7 @@ try {
 
   // (e) 静态审计：源码里不得出现「显式赋 undefined」的返回字段。
   //     上面是运行时覆盖，这里兜住没被派发走到的分支（超时分支的 r.code === null 就是其一）。
-  const sourceText = readFileSync(join(pluginRoot, 'lib', 'index.js'), 'utf8');
+  const sourceText = readFileSync(join(pluginRoot, 'lib', 'impl.js'), 'utf8');
   const lineOf = (index) => sourceText.slice(0, index).split('\n').length;
   // 两个模式缺一不可：第一个抓条件表达式里裸露的 undefined（`x: a ? b : undefined`），
   // 第二个抓「裸标识符 + 行尾 }/)」，也就是本次事故那行 `screenshotReview });` ——
@@ -473,7 +473,7 @@ try {
   ].map((m) => `${m[1]}（第 ${lineOf(m.index)} 行）`);
   check(
     undefinedFields.length === 0,
-    'lib/index.js 没有「显式赋 undefined」的返回字段',
+    'lib/impl.js 没有「显式赋 undefined」的返回字段',
     undefinedFields.length ? `${undefinedFields.join('; ')} ← 可选键要用条件展开省略` : '可选键一律条件展开省略，或用 ?? null（仅限 schema 允许 null 的键）',
   );
 } catch (error) {
@@ -523,7 +523,7 @@ const savedRootRel = config.workspaceRoot;
 config.workspaceRoot = releaseRoot;
 try {
   // ── 夹具 1：desktop（collect 模式）—— 脚本产出固定名，_v 后缀与校验码由插件补 ──
-  const deskDir = join(releaseRoot, 'kirara_server');
+  const deskDir = join(releaseRoot, 'Kirara_Server_Studio');
   mkdirSync(join(deskDir, 'installer'), { recursive: true });
   mkdirSync(join(deskDir, 'tools'), { recursive: true });
   writeFileSync(join(deskDir, 'installer', 'Kirara_Server_Setup.iss'), '#define MyAppVersion "1.6.6"\r\n');

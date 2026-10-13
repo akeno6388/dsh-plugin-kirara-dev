@@ -97,8 +97,10 @@ defineTool({
 
 两个直接推论：
 
-- 改完 `cordis.patch.yml` 或 `package.json` **必须重启 DSH**，这两个只在启动时读一次；
-  只有改 `lib/index.js` 才有机会被热加载。
+- 改完 `cordis.patch.yml` 或 `package.json` **必须重启 DSH**，这两个只在启动时读一次。
+- 改 `lib/impl.js`（实现层）**不需要重启**：引导层会在同步/重载时用 `?v=<sha>` 重新 import 它，
+  插件的「同步更新」按钮走的就是这条路（见[自更新](self-update.md)）；只有改 `lib/index.js`（引导层）
+  或 `lib/update.js`（内核）才需要重新部署并重启一次。
 - `file:` 安装是**拷贝**，改完源码要重新部署才会传染到 profile。
 
 ## 宿主包必须声明为 `peerDependencies`

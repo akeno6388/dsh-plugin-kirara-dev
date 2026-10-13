@@ -6,7 +6,7 @@
  * 「插件能加载 + 工具能跑通」，从而把「必须重启 DSH」的反馈环缩到秒级。
  */
 // 相对本文件定位插件入口：这样脚本搬目录 / 改仓库位置都不用跟着改路径。
-const pluginPath = new URL('../lib/index.js', import.meta.url).href;
+const pluginPath = new URL('../lib/impl.js', import.meta.url).href;
 
 // 发布链路（§8/§9）要造一个**合成 git 仓库**才能钉住提交分类规则，
 // 所以这里需要起进程；仓库夹具是自建的临时目录，不碰宿主上的任何真实仓库。
@@ -28,7 +28,7 @@ if (typeof mod.apply !== 'function') throw new Error('apply 不是函数 —— 
  * 工作区根（三端仓库的父目录）—— 相对本文件推导，**不含作者机器路径**。
  * 本文件在 <workspace>/dsh-plugin-kirara-dev/scripts/ 下，所以上两级就是 workspace，
  * 与 cache-budget.mjs 的 WORKSPACE_ROOT 用同一套推导。
- * 插件按文档约定与 kirara_server / kirara_-server-api / Kirara_Media 并列，
+ * 插件按文档约定与 Kirara_Server_Studio / Kirara_Server-API / Kirara_Media 并列，
  * 因此换机器、换克隆位置都不用改这里。DSH_WORKSPACE 可覆盖（与插件自身的回退顺序一致）。
  */
 const workspaceRoot = (process.env.DSH_WORKSPACE || '').trim()
@@ -261,9 +261,9 @@ console.log('\n=== 5. kirara_verify (small/docs 应跳过 / full 应给清单) =
 console.log('\n=== 5.5 kirara_docsync（自行判断该同步哪几篇文档） ===');
 {
   for (const [feature, changes] of [
-    ['新增评论 @ 提醒功能', ['kirara_-server-api/Controllers/CommentsController.cs']],
-    ['修复令牌扫码导入失败', ['kirara_-server-api/Services/TokenImportService.cs']],
-    ['格式化代码并重命名变量', ['kirara_server/Services/Foo.cs']],
+    ['新增评论 @ 提醒功能', ['Kirara_Server-API/Controllers/CommentsController.cs']],
+    ['修复令牌扫码导入失败', ['Kirara_Server-API/Services/TokenImportService.cs']],
+    ['格式化代码并重命名变量', ['Kirara_Server_Studio/Services/Foo.cs']],
     ['更新技术栈文档里的 Gradle 版本', []],
   ]) {
     const { value } = await call('kirara_docsync', { feature, changes });
