@@ -117,7 +117,7 @@ kirara_docsync({
 
 | 端 | 打包方式 | 版本号来源 | 递增 |
 | --- | --- | --- | --- |
-| desktop | 仓库自带的 `tools/publish_all.ps1`（编译出固定文件名的 Inno Setup 安装包） | `installer/Kirara_Server_Setup.iss` 与 `Kirara_Server-WinUI.csproj`，两处必须一致 | 不自动递增（重新打包当前版本） |
+| desktop | 仓库自带的 `tools/publish_all.ps1`（编译出固定文件名的 Inno Setup 安装包） | `installer/Kirara_Server_Setup.iss` 与 `Kirara_Server_Studio.csproj`，两处必须一致 | 不自动递增（重新打包当前版本） |
 | media | 仓库自带的 `tools/build_release.ps1 -Version <v>` | `app/build.gradle.kts` 的 `versionName` | 不自动递增 |
 | api | 技术栈文档 §13.0 的 `docker build` + `docker save` | 技术栈文档里最大的 `kirara-api:X.Y.Z` | **自动 +1（patch）** |
 
@@ -192,7 +192,7 @@ kirara_release({ project: 'api', dryRun: true }) // 只看计划，什么都不�
 
 | 端 | 仓库目录 | 构建命令 |
 | --- | --- | --- |
-| desktop | `Kirara_Server_Studio` | `dotnet build Kirara_Server-WinUI.slnx -c Debug -p:Platform=x64 --nologo` |
+| desktop | `Kirara_Server_Studio` | `dotnet build Kirara_Server_Studio.slnx -c Debug -p:Platform=x64 --nologo` |
 | api | `Kirara_Server-API` | `dotnet build Kirara_Server-API.Server/Kirara_Server-API.Server.csproj -c Debug --nologo` |
 | media | `Kirara_Media` | `gradlew.bat assembleDebug --console=plain` |
 
@@ -555,7 +555,7 @@ DSH 把依赖写成 `git+…` 地址，**装上那一刻是什么就一直是那
 4.2 秒对整解的 11 秒，是刻意保留的选择而不是绕坑。命令行里手动构建，整解与单项目现在都可以用。
 
 **桌面端构建报平台相关错误？**
-`Kirara_Server-WinUI.slnx` 只注册了 `x64`，必须显式传 `-p:Platform=x64`。
+`Kirara_Server_Studio.slnx` 只注册了 `x64`，必须显式传 `-p:Platform=x64`。
 
 **发布时提示 Docker 守护进程不可用？**
 `kirara_release` 发布 api 需要 Docker Desktop 在运行。插件在动手**之前**就会探测，探不到直接拦下

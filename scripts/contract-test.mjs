@@ -527,7 +527,7 @@ try {
   mkdirSync(join(deskDir, 'installer'), { recursive: true });
   mkdirSync(join(deskDir, 'tools'), { recursive: true });
   writeFileSync(join(deskDir, 'installer', 'Kirara_Server_Setup.iss'), '#define MyAppVersion "1.6.6"\r\n');
-  writeFileSync(join(deskDir, 'Kirara_Server-WinUI.csproj'), '<Project><Version>1.6.6</Version></Project>\r\n');
+  writeFileSync(join(deskDir, 'Kirara_Server_Studio.csproj'), '<Project><Version>1.6.6</Version></Project>\r\n');
   writeFileSync(join(deskDir, 'README.md'), '# App\r\nversion-1.6.6\r\n');
   writeFileSync(join(deskDir, 'README.en.md'), '# App\r\nversion-1.6.6\r\n');
   writeStable(

@@ -86,7 +86,8 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
   > `test-assets/DbCheck/DbCheck.csproj`，整解构建以 `MSB3202` 在 0.8 秒内失败，这也是当初
   > 改成单项目构建的起因。该悬空引用已删除（`kirara_server-api` 4db2275），整解现在可以构建成功；
   > 相应地把这条「绕坑」说明与 `PROJECTS.api.constraints` 里的悬空引用条目一并去掉了。
-- **desktop 必须显式给平台**：`Kirara_Server-WinUI.slnx` 只注册了 `x64`，命令里固定带 `-p:Platform=x64`。
+- **desktop 必须显式给平台**：`Kirara_Server_Studio.slnx` 只注册了 `x64`，命令里固定带 `-p:Platform=x64`。
+  （2026-10-15 工程更名：`Kirara_Server-WinUI.slnx` / `.csproj` → `Kirara_Server_Studio.slnx` / `.csproj`，旧名已不存在。）
 - **media 不跑单元测试**：按项目约定只用 `gradlew.bat assembleDebug`。
 
 ## `SAFETY_RULES`：进程清理红线
@@ -237,7 +238,7 @@ docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
 
 | 字段 | 含义 |
 | --- | --- |
-| `versionFrom` | 版本号从哪读。数组；每项 `{ file, re, pick? }`，`re` 的第 1 个捕获组即版本号。多个来源解析出的版本**不一致时判失败** —— desktop 的 `installer/Kirara_Server_Setup.iss` 与 `Kirara_Server-WinUI.csproj` 必须两处一致，不一致时打出来的包和显示的版本号就会是两回事 |
+| `versionFrom` | 版本号从哪读。数组；每项 `{ file, re, pick? }`，`re` 的第 1 个捕获组即版本号。多个来源解析出的版本**不一致时判失败** —— desktop 的 `installer/Kirara_Server_Setup.iss` 与 `Kirara_Server_Studio.csproj` 必须两处一致，不一致时打出来的包和显示的版本号就会是两回事 |
 | `bump` | `none`（重新打包当前版本）/ `patch` / `minor` / `major`。默认 `none`；api 是唯一默认 `patch` 的端，因为它没有版本文件，只能按文档里的最高版本 +1 |
 | `publish` | 跑哪个自带脚本。desktop 不需要额外参数；media 需要 `-Version` / `-OutputDir` 两个参数名 |
 | `package` | 产物怎么来、叫什么。`mode: 'collect'` = 脚本产出固定文件名，插件找出来改名；`mode: 'script'` = 脚本自己输出到目标目录，插件**核验**（规范名不存在时按 `from.re` + mtime 快照找出「本次新产生/被改写」的候选，唯一才改名、并同步改写校验码正文里的文件名；候选不唯一则拒绝猜测）；`mode: 'docker-tar'` = api 的 `docker build` + `docker save` |
