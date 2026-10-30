@@ -536,7 +536,7 @@ try {
       '$root = Split-Path -Parent $PSScriptRoot',
       '$dir = Join-Path $root "bin\\installer"',
       'New-Item -ItemType Directory -Path $dir -Force | Out-Null',
-      'Set-Content -LiteralPath (Join-Path $dir "Kirara_Server_APP_Setup_x64.exe") -Value "fake installer payload"',
+      'Set-Content -LiteralPath (Join-Path $dir "Kirara_Server_Studio_Setup_x64.exe") -Value "fake installer payload"',
     ].join('\r\n'),
   );
 
@@ -546,7 +546,7 @@ try {
   const text1 = (out1.finished?.content ?? []).map((b) => b.text ?? '').join('\n');
   check(/发布完成/.test(text1), 'desktop 发布：判定为成功', text1.split('\n')[0]);
 
-  const artName = 'Kirara_Server_APP_Setup_x64_v1.6.6.exe';
+  const artName = 'Kirara_Server_Studio_Setup_x64_v1.6.6.exe';
   const artPath = join(releaseOut, artName);
   const shaPath = artPath + '.sha256';
   check(existsSync(artPath), 'desktop 产物已按 _v<版本> 命名并落到输出目录', artName);

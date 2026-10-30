@@ -196,7 +196,7 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 === 6.6 端到端真构建 kirara_build api（可选，加 --live-build） ===
   ✓ 真实 api 构建经宿主返回      ✅ 构建成功 — api  (1.4s, exit=0)
 === 6.7 发布链路端到端（假发布脚本 + 真实文件系统） ===
-  ✓ desktop 产物已按 _v<版本> 命名并落到输出目录   Kirara_Server_APP_Setup_x64_v1.6.6.exe
+  ✓ desktop 产物已按 _v<版本> 命名并落到输出目录   Kirara_Server_Studio_Setup_x64_v1.6.6.exe
   ✓ desktop 校验码是 sha256sum 格式（HASH *文件名）
   ✓ README 本轮没更新过时：发布被门禁拦下
   ✓ README 改动提交进本轮区间后自动放行（无需 force）

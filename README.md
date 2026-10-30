@@ -150,7 +150,7 @@ kirara_release({ project: 'api', dryRun: true }) // 只看计划，什么都不�
 `dryRun` 会给出完整步骤表、解析出的版本号、以及**所有前置条件是否满足**。真发布时按端做这些事：
 
 - **desktop**：跑 `publish_all.ps1` → 在 `bin/installer` 里按正则找产物 → 复制并重命名为
-  `Kirara_Server_APP_Setup_x64_v<版本>.exe` → 落到桌面 → 生成同名 `.sha256`
+  `Kirara_Server_Studio_Setup_x64_v<版本>.exe` → 落到桌面 → 生成同名 `.sha256`
 - **media**：跑 `build_release.ps1`（脚本自己就会输出到桌面并写好 `.sha256`）→ 插件**核验**产物
   与校验码一致；脚本没留校验码就补写。**脚本没按版本号命名时，插件会补 `_v<版本>` 后缀** ——
   找出本次新产生或被改写的候选产物，唯一才改名（同时改写校验码正文里的文件名，
