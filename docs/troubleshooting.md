@@ -232,6 +232,54 @@ Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(<工作区根>)
 | `kirara_release_notes` 的区间大得离谱 | 该仓库没有任何版本 tag，退回了首个提交（后端仓库就是） | 用 `from` 显式收窄；或给发布打 tag |
 | `kirara_release` 报「脚本产出的校验码与实际不一致」 | 产物在写校验码之后又被改动，或脚本本身有问题 | 查 `tools/build_release.ps1`；**不要**改成照抄脚本给的哈希 |
 | `kirara_release` 报「找不到产物」 | 发布脚本改了输出文件名或目录，与 `PROJECTS[].release.package.from` 的正则对不上 | 改 `PROJECTS[].release.package.from`（正则 + 目录），别改工具逻辑 |
+| `kirara_build` 对 media 报 `exit=9009` / `JAVA_HOME is not set` | **不是插件故障**：宿主进程的 PATH 里没有 `java`，`gradlew.bat` 内部空转 | 给 DSH 的启动环境设 `JAVA_HOME`（JDK 17+），或在有 JDK 的终端里先跑一次 |
+| `kirara_build({ project: 'media', target: 'ios' })` 在 Windows 上「只跑了 klib」 | **设计如此**：链接 / 出包 / 模拟器自检只有 macOS 能做 | 看返回的 `macCommands`，在 Mac 上照抄执行；这是交接，不是失败 |
+| 在 Mac 上 `target=android` 构建失败 | 那台机器没装 Android SDK（P0 清单 §9.2-⑤ 实测） | Android 回归回 Windows；Mac 上默认走 `target=ios` |
+| `target=ios` 说构建 PASS 但没截到图 | `run-simulator.sh` 装 App 或启动失败（脚本自己会打 `❌`），或 `KIRARA_OUT` 指向了别处 | 看 `verdicts` 与日志尾部；截图目录是 `iosApp/.tmp/ios-evidence/` |
+| iOS 清单里让人「开 DeviceHub」 | **不是故障**：`simctl` 不能打字/点击，键盘/IME/手动登录只能人肉 | `open /Applications/Xcode.app/Contents/Applications/DeviceHub.app` |
+
+## 事故六：contract-test 在本机宿主上整段失败（与插件改动无关）
+
+现象（2026-11 实测）：`node scripts/contract-test.mjs --from source` 在第 2 节就红 ——
+
+```
+✓ ToolRuntime 已作为 ctx.tools 服务挂载
+✗ TOOL_RUNTIME_SCHEDULER 可解析且带 prepare()
+     这正是事故里为 undefined 的那个查表结果
+```
+
+后面所有 `prepare()` 都变成 `Cannot read properties of undefined (reading 'prepare')`。
+
+**先确认它不是你的改动**：把 `lib/impl.js` 临时还原成 HEAD 再跑一遍，现象一样 ⇒ 是宿主版本与
+夹具假设不一致（本机宿主 `dsh-tools` 为 `0.2.2-rc.1`，`ctx.tools[TOOL_RUNTIME_SCHEDULER]` 不再
+是夹具期望的那个查表方式）。此时**不要**去改插件的返回值形状来「迁就」测试，那会把真机正常、
+夹具全红的局面反过来变成真机全崩。
+
+根因（2026-11 查清）：0.2.2-rc.1 起宿主把执行路径改成
+**`ToolsService.setExecutor()` + `@deepseek-ai/dsh-tool-executor-native`**，
+`TOOL_RUNTIME_SCHEDULER` 这个符号**不再导出**，于是 `contract-test.mjs` 里
+`ctx.tools[TOOL_RUNTIME_SCHEDULER]` 恒为 `undefined`，后续所有 `prepare()` 全部炸掉。
+`contract-test` 因此在本机宿主上已整体失效（它守的契约本身仍然有效，只是取执行器的方式过期了）。
+
+替代的回归路径（四条都能跑，**发版前四条全绿**）：
+
+1. `node scripts/selftest.mjs` —— 工具业务逻辑（假 ctx）；
+2. `node scripts/cache-budget.mjs` —— 工具目录字节 + 每个工具的输出预算；
+3. `node scripts/host-dispatch.mjs` —— **走现行宿主 API 的真派发**：真实 cordis `Context` +
+   `ToolsService` + native 执行器，把 10 个工具挨个派发一遍，命中 iOS 分支
+   （`target=ios` 的 `macCommands`、media 的 iOS 清单、`profile` 的 `ios` 块）。它守的正是
+   「返回值被宿主拒收」这件事（lossless JSON + `output.schema`），**新增可选键的那一轮必跑**；
+4. 在真实 DSH 会话里直接调 `kirara_*` —— 唯一能证明「GUI 那条链路也接受」的路径。
+
+`host-dispatch.mjs` 自己踩过的两个坑，记下来免得重犯：
+
+| 坑 | 现象 | 原因与解法 |
+| --- | --- | --- |
+| `DSH_PROFILE` 猜成 `desktop` | 找不到已部署副本，静默改测源码树，等于没验部署 | profile 目录名是 `desktop-017` 这类带序号的。优先读宿主导出的 `DSH_PROFILE_DIR`，再用 `DSH_HOME`/`DSH_PROFILE` 拼，`--from source` 才显式测源码 |
+| 派发时没给 `signal` | `Tool batch execution failed | cause=Cannot read properties of undefined (reading 'aborted')` | `pipeline.js` 的 `runGroup` 直接读 `signal.aborted`，必须传 `new AbortController().signal` |
+
+另外：`node` 在 stderr 打 `DEP0190`（fixture 里 `spawn` 带 `shell: true`）会让 PowerShell
+把成功当成失败 —— 脚本自身退出码是 0，用 `$LASTEXITCODE` 判，或加 `--no-warnings`。
 
 ## 事故五：发布链路开发中契约测试抓出来的两个 bug
 

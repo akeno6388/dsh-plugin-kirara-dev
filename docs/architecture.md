@@ -66,6 +66,7 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | `specs` | 解决方案文件 |
 | `docs` | 该端相关的技术文档路径。`kirara_start` 按这个列表推荐要读的文档，`kirara_docsync` 把它当作「该同步哪些文档」的候选来源 —— 所以**只列真实存在的文件**，列了不存在的路径只会产出死链推荐 |
 | `constraints` | 该端的硬约束，会随 `kirara_profile` 一起返回 |
+| `ios` | **仅 media 有**：双端里 iOS 那一半的事实（`targets` / `versionLock` / `klibTasks` / `linkTasks` / 自检脚本 / 模拟器与 bundleId / 截图落点 / `pitfalls` / `docs`）。详见[media 的 iOS 半边](#media-的-ios-半边跨两台机器的一条链) |
 | `apk` | 仅 media 有，构建产物路径，`kirara_build` 用它判断产物是否真的生成 |
 | `release` | 该端的发布现实：版本号从哪读、是否递增、跑哪个脚本、产物怎么命名、有哪些前置条件、哪几篇 README 要过门禁。细节见[发布链路](#发布链路kirara_release--kirara_release_notes) |
 
@@ -75,7 +76,7 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | --- | --- | --- | --- |
 | desktop | `Kirara_Server_Studio` | WinUI 3 (Windows App SDK 2.3.1) + C# 13 + .NET 10 + CommunityToolkit.Mvvm 8.4 + LiteDB | `net10.0-windows10.0.19041.0` |
 | api | `Kirara_Server-API` | ASP.NET Core 10 + Aspire 13.2.4 + PostgreSQL 16 / EF Core 10 + Redis + MinIO + SignalR | — |
-| media | `Kirara_Media` | Kotlin + Jetpack Compose + Hilt + OkHttp + Coil + kotlinx.serialization | — |
+| media | `Kirara_Media` | Kotlin Multiplatform + Compose Multiplatform 共享 UI（`:shared`）+ Koin；Android 壳 Jetpack Compose + Hilt + OkHttp + Coil，iOS 壳 SwiftUI + WKWebView | — |
 
 ### 内置命令里刻意绕开的坑
 
@@ -88,7 +89,38 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
   > 相应地把这条「绕坑」说明与 `PROJECTS.api.constraints` 里的悬空引用条目一并去掉了。
 - **desktop 必须显式给平台**：`Kirara_Server_Studio.slnx` 只注册了 `x64`，命令里固定带 `-p:Platform=x64`。
   （2026-10-15 工程更名：`Kirara_Server-WinUI.slnx` / `.csproj` → `Kirara_Server_Studio.slnx` / `.csproj`，旧名已不存在。）
-- **media 不跑单元测试**：按项目约定只用 `gradlew.bat assembleDebug`。
+- **media 不跑单元测试**：按项目约定只用构建 + 实机/模拟器验证。
+- **media 的命令按宿主机切**：Android 用 `gradlew.bat assembleDebug`，iOS 用
+  `:shared:compileKotlinIos*` → `:shared:linkDebugFrameworkIos*` → `bash iosApp/run-simulator.sh`。
+  `build` 字段只留 Android 那条（它是可发版主线）；iOS 那几条在 `ios.klibTasks` / `ios.linkTasks` /
+  `ios.script` 里，由 `gradleInvocation()` / `iosPlan()` 按 `process.platform` 组装 ——
+  **不把 mac 命令写进 Windows 的 `build`**，否则 `kirara_build` 会在 Windows 上 ENOENT。
+
+### media 的 iOS 半边：一条跨两台机器的链
+
+这是本插件里唯一**不是单机流程**的一段，所以它的事实全部集中在 `PROJECTS.media.ios`，
+而不是散进各个工具：
+
+| 步骤 | 命令 | 能在哪跑 |
+| --- | --- | --- |
+| klib 门禁 | `:shared:compileKotlinIosArm64 :shared:compileKotlinIosSimulatorArm64` | Windows / macOS 都行 |
+| 链接 framework | `:shared:linkDebugFrameworkIosSimulatorArm64 :shared:linkDebugFrameworkIosArm64` | 仅 macOS |
+| 模拟器自检 + 截图 | `bash iosApp/run-simulator.sh`（`KIRARA_IOS_SELFTEST=1` 等环境变量） | 仅 macOS |
+
+三条设计决定：
+
+1. **不新增工具，只在 `kirara_build` 上加 `target`。** 工具目录是前缀缓存的一部分，加一个工具
+   要付一次「整段前缀作废」的代价；而「跑 iOS 的哪一段」本来就是一个命令的变体。
+2. **不能跑的目标不假装跑过。** Windows 上 `target=ios` 会退化成 klib 门禁，把 mac 命令放进
+   `macCommands`，`note` 里写明原因 —— 谎报一次「iOS 构建成功」比报错贵得多。
+3. **`target=ios` 的产出直接接进 `kirara_verify`。** 脚本自己截图，`execute` 收集
+   `iosApp/.tmp/ios-evidence/*.png` 放进 `screenshots`，于是 UI 改动那条「截图 → 视觉复核 →
+   按 P0/P1 改 → 重截」的环在 Mac 上是**闭合**的（Windows 上则明确要求交接给 Mac）。
+
+`ios.pitfalls` 是「静默失败」的坑（Xcode 不读 `~/.zshrc`、`doInitKoinIos()`、
+`simctl` 不能打字、`setCookie` 必须等回调…）。它们**不写进 tool description**（那是常驻前缀），
+只在 `kirara_verify` 的 iOS 清单里挑最相关的几条出现，完整清单永远指向
+`Kirara_Media/app/docs/Kirara Media iOS P0 Mac 执行清单.md`。
 
 ## `SAFETY_RULES`：进程清理红线
 
@@ -115,7 +147,12 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | --- | --- |
 | desktop | `winui` / 桌面 / 客户端 / 方案 / 令牌 / 实例 / `webview2` / `rdp` / `openvpn` / `jellyfin` / 界面 / `xaml` / 首页 / 评论 / 任务栏 / 托盘 |
 | api | `api` / 接口 / 服务端 / 后端 / 数据库 / `postgres` / `controller` / `signalr` / `minio` / `redis` / `aspire` / 迁移 / `sql` / `jwt` / 鉴权 |
-| media | `android` / 安卓 / 手机 / `apk` / `compose` / `kotlin` / `gradle` |
+| media | `android` / 安卓 / 手机 / `apk` / `compose` / `kotlin` / `gradle` / **`ios` / iphone / ipad / xcode / swiftui / simctl / wkwebview / 模拟器 / 双端** |
+
+media 是双端，Android 与 iOS **共用同一个 `key`**（同一批 `:shared` 代码、同一批文档），
+平台差异不拆成两个「端」，而是由 `kirara_build` 的 `target` 收口。
+`IOS_SIGNALS` 单独抽成一个常量，被路由、文档选择、验证清单三处共用 ——
+否则会出现「路由说是 iOS、验证清单却给 Android 的 adb 步骤」这种自相矛盾。
 
 ### 升级为 `full` 的信号
 
@@ -125,7 +162,7 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | --- | --- | --- |
 | `UI_HINTS` | 外观 / 视觉词 | 界面、渲染、布局、样式、配色、暗色、字体、图标、动画、开关、弹窗、按钮、菜单、`xaml`、`theme` |
 | `INTERACTION_SIGNALS` | 社交 / 交互功能词族 | `@`、提醒、通知、提及、评论、回复、点赞、收藏、分享、私信、聊天、消息、关注、订阅、推送 |
-| `ROUTE_SIGNALS[].ui` | 某端专属的交互词 | `desktop.ui` = 评论 / 首页 / 界面 / `xaml` / 托盘 / 任务栏 |
+| `ROUTE_SIGNALS[].ui` | 某端专属的交互词 | `desktop.ui` = 评论 / 首页 / 界面 / `xaml` / 托盘 / 任务栏；`media.ui` = `IOS_SIGNALS`（iOS 的效果只能看模拟器截图，与界面词同权） |
 | `DESTRUCTIVE_SIGNALS` | 破坏性 / 不可逆操作 | 破坏性、删除、移除、下线、停用、重命名、重构、重写、替换、更换、回滚、架构调整 |
 
 数据库结构变更要求**两个词同时出现**，也就是 `DB_ACTION ∧ DB_OBJECT`：
@@ -203,6 +240,7 @@ docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
 | --- | --- | --- |
 | `api-surface` | 接口 / 端点 / api / controller / 鉴权 / jwt / signalr | api：`docs/Kirara Server API 完整文档.md` |
 | `stack` | 技术栈 / 依赖 / 框架 / 版本 / sdk / nuget / gradle / postgres / redis / minio，以及**约束 / 构建 / slnx / x64 / assemble / 权限 / 红线** | 各端技术栈文档（构建命令与硬约束的权威落点） |
+| `ios-side` | `IOS_SIGNALS`：ios / iphone / ipad / xcode / swiftui / simctl / wkwebview / devicehub / 模拟器 / 双端 | media：主技术栈文档（§64–§69 的实测事实）+ `app/docs/Kirara Media iOS P0 Mac 执行清单.md`（Mac 环境与坑）。**两者都不能省** —— 只改前者会让下一轮重新踩 Xcode/JAVA_HOME/DeviceHub 的坑 |
 | `requirement` | 需求 / 功能 / 交互 / 流程 / 界面 / 首页 / 评论 / 设置 / 登录 | desktop：`docs/技术栈文档.md`（原 `需求文档.md` 已删除、内容并入其中）；media：技术栈文档 |
 | `readme` | 安装 / 用法 / 发版 / 版本号 / 下载 / apk / 部署 | 各端 `README.md` |
 

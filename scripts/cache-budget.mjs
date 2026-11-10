@@ -55,6 +55,13 @@ const BUDGET = {
   startRenderChars: 1400,
   /** kirara_verify full 单次 render 的字符上限（含 ui-design 复核协议 ≈ 1388）。 */
   verifyRenderChars: 2000,
+  /**
+   * kirara_verify 走 **media 的 iOS 清单**时的上限。
+   * 为什么单独一条：iOS 的验收步骤比 Android 多两步（模拟器自检 + DeviceHub 人肉），
+   * 而 `screenshotReview.instruction` 是**要被原样执行**的提示词 —— 被 textBudget 截断等于
+   * 协议作废。夹具因此必须把这条路径也钉住（Windows 上靠 summary 里的 iOS 词就能走到）。
+   */
+  verifyIosRenderChars: 2100,
   /** kirara_docsync 单次 render 的字符上限（三端混合、4 篇目标 ≈ 1440；预算 2400 + 头部）。 */
   docsyncRenderChars: 2500,
   /** 叙述型工具（start/route/profile/verify/summary）的硬预算 textBudgetChars（2400，原 1600）。 */
@@ -202,6 +209,18 @@ const checks = [
     BUDGET.verifyRenderChars,
   ],
   ['kirara_start（纯文档，免构建）', 'kirara_start', { request: '同步一下文档', mode: 'docs' }, 900],
+  [
+    'kirara_verify（media iOS 模拟器清单 + 截图）',
+    'kirara_verify',
+    {
+      summary: 'iOS 端登录页按钮间距调整',
+      project: 'media',
+      mode: 'full',
+      purpose: 'ui-design',
+      screenshots: [import.meta.filename],
+    },
+    BUDGET.verifyIosRenderChars,
+  ],
   [
     'kirara_docsync（三端混合）',
     'kirara_docsync',

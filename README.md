@@ -28,7 +28,7 @@
 | `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读那些几百 KB 的技术文档 |
 | `kirara_docs` | 在技术文档里按关键词检索，返回 `文件:行号` 和所属章节 |
 | `kirara_route` | 把一句话需求展开成路线：涉及端、执行步骤、决策点 |
-| `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部 |
+| `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部。media 是双端，`target` 可选 `android` / `ios-klib` / `ios-framework` / `ios`（`ios` 会跑模拟器自检并直接产出 UI 截图） |
 | `kirara_verify` | 产出分步的真机验收清单（步骤 + 预期结果）；传入截图路径可以额外拿到一段视觉复核协议，`purpose=ui-design` 时给的是「该怎么改」的 P0/P1 修改建议 |
 | `kirara_docsync` | **文档同步**。自行判断本轮改动属于新功能 / BUG 修复 / 界面改动 / 纯内部整理，产出该更新的文档清单（哪几篇 + 哪些章节 + 逐条清单） |
 | `kirara_release_notes` | **发布素材**。取「上个版本 tag → HEAD」的全部提交，按「新增功能 / 修复 / 内部整理 / 需人工判断」分好桶，并核验 README 是否跟上本轮 |
@@ -194,10 +194,60 @@ kirara_release({ project: 'api', dryRun: true }) // 只看计划，什么都不�
 | --- | --- | --- |
 | desktop | `Kirara_Server_Studio` | `dotnet build Kirara_Server_Studio.slnx -c Debug -p:Platform=x64 --nologo` |
 | api | `Kirara_Server-API` | `dotnet build Kirara_Server-API.Server/Kirara_Server-API.Server.csproj -c Debug --nologo` |
-| media | `Kirara_Media` | `gradlew.bat assembleDebug --console=plain` |
+| media（Android） | `Kirara_Media` | `gradlew.bat assembleDebug --console=plain` |
+| media（iOS） | `Kirara_Media` | macOS：`./gradlew :shared:compileKotlinIos*` → `linkDebugFrameworkIos*` → `bash iosApp/run-simulator.sh`；Windows 只有第一步（klib） |
 
 `kirara_build` 在 DSH 宿主进程里执行，因此不受 PowerShell 沙箱的 stdio 限制，也不占用工具调用超时。
 默认单次构建最长等 20 分钟，够 Gradle 冷启动。
+
+#### media 是双端：`target` 决定跑哪条链
+
+`Kirara_Media` 是 **Android + iOS 双端**：`:shared` 是 Kotlin Multiplatform 的共享 UI（Compose
+Multiplatform），`iosApp/` 是 SwiftUI 薄壳。两端的工具链**不在同一台机器上**，这是本项目最容易
+踩错的一条：
+
+| 能跑什么 | Windows | macOS（Apple Silicon） |
+| --- | --- | --- |
+| Android `assembleDebug` | ✅ | ⚠️ macOS 上没装 Android SDK，会失败 |
+| iOS klib（`:shared:compileKotlinIos*`） | ✅ | ✅ |
+| 链接 `shared.framework` | ❌ | ✅ |
+| Xcode 出包 / 模拟器自检 + 截图 | ❌ | ✅ |
+
+所以 media 的 `kirara_build` 多了一个 `target`：
+
+| `target` | 实际跑什么 | 哪台机器能跑 |
+| --- | --- | --- |
+| `auto`（默认） | macOS → `ios`；Windows → `android` | — |
+| `android` | `gradlew.bat assembleDebug --console=plain` | Windows |
+| `ios-klib` | `:shared:compileKotlinIosArm64 :shared:compileKotlinIosSimulatorArm64` | **两边都行**（最快的 iOS 门禁） |
+| `ios-framework` | `linkDebugFrameworkIosSimulatorArm64 :shared:linkDebugFrameworkIosArm64` | 仅 macOS |
+| `ios` | `bash iosApp/run-simulator.sh`：构建 → 装模拟器 → 启动 → 截图 → ✅/❌ | 仅 macOS |
+
+在 Windows 上请求后两个，插件**不会假装跑过**：它退化成 klib 门禁，把要在 Mac 上执行的命令放进
+`macCommands`，`ok` 只代表 klib 的结果，`note` 里会写明「链接/出包/模拟器必须在 macOS」。
+
+#### iOS 的 UI 验证是闭环的：`target=ios` 直接产出截图
+
+iOS 的验证靠**模拟器 + 截图**（这台 Mac 上没有 `Simulator.app` —— 模拟器 GUI 是 Xcode 27 的
+`DeviceHub.app`，可复现的取证只走 `simctl`）。`iosApp/run-simulator.sh` 已经把整条链固定下来，
+插件把它接成一步：
+
+```
+kirara_build({ project: 'media', target: 'ios' })
+  → screenshots: [.../01-login.png, 02-logged-in.png, 03-wkwebview.png]
+  → 直接把这几条绝对路径喂给
+kirara_verify({ summary, project: 'media', mode: 'full', purpose: 'ui-design', screenshots: [...] })
+  → 拿 P0/P1 清单 → 改代码 → 再 target=ios 重截 → 再复核
+```
+
+脚本会默认打开端到端自检与 T4（`KIRARA_IOS_SELFTEST=1 KIRARA_IOS_T4=1`，诊断浮层关闭），
+因为只截一张登录页不足以证明「改动在界面上可见」。
+
+`simctl` 不能打字、也不能点击，所以**键盘 / IME / 手动登录**这类只能开 DeviceHub 人肉复核 ——
+清单里会明确写出这一条，不要用「构建通过」代替。完整的 Mac 环境（Xcode 27.2 / iOS 27.2 运行时 /
+JDK 位置）与九条「静默失败」的坑点见
+`Kirara_Media/app/docs/Kirara Media iOS P0 Mac 执行清单.md`（§7 已知提示、§9.7 DeviceHub、
+§10–§11 主仓构建与验收）；`kirara_profile({ project: 'media' })` 会给出其中三条最关键的。
 
 ## 前置条件
 
@@ -208,7 +258,8 @@ kirara_release({ project: 'api', dryRun: true }) // 只看计划，什么都不�
 | DSH 0.2.x | 插件运行环境 |
 | Kirara 三端仓库（至少你关心那一端） | 被编排的对象 |
 | .NET 10 SDK + WinUI 3 工作负载 | `kirara_build` 构建 desktop |
-| JDK 17 + Android SDK | `kirara_build` 构建 media |
+| JDK 17 + Android SDK | `kirara_build` 构建 media 的 Android 端（`target=android`） |
+| macOS + Xcode（Apple Silicon） | media 的 iOS 端：`target=ios-klib` 在 Windows 也能跑，但 `ios-framework` / `ios` 必须有 Mac。Mac 上**不需要** Android SDK |
 | Docker Desktop（且**正在运行**） | `kirara_release` 发布 api：`docker build` / `docker save` 都要它。没启动时发布会被前置检查拦下，而不是跑到一半失败 |
 | Inno Setup 6（`ISCC.exe`） | desktop 的发布脚本编译安装包 |
 | `Kirara_Media/keystore.properties` | media 的 release 签名。缺失时发布会被签名前置检查拦下 |
@@ -323,7 +374,9 @@ kirara_profile({})                                 // 三端画像
 kirara_profile({ project: 'api' })                 // 只看 API 端
 kirara_docs({ keywords: ['MinIO', '预签名'] })      // 跨文档检索
 kirara_docs({ keywords: ['评论'], project: 'api' }) // 限定单个子项目
-kirara_build({ project: 'media' })                 // 构建 Android 端
+kirara_build({ project: 'media' })                 // Android 端（Windows 默认）
+kirara_build({ project: 'media', target: 'ios' })   // iOS：模拟器自检 + 截图（仅 macOS）
+kirara_build({ project: 'media', target: 'ios-klib' })  // iOS 侧最快门禁（Windows 也能跑）
 kirara_verify({ summary: '设置页加暗色开关', project: 'media', mode: 'full' })
 kirara_docsync({ feature: '评论支持 @ 提醒', changes: ['Kirara_Server-API/Controllers/CommentsController.cs'] })
 kirara_release_notes({ project: 'api' })            // 发布素材（后端没有版本 tag ⇒ 自动退回首提交）
@@ -371,6 +424,11 @@ kirara_verify({
 **没给截图时不会静默放过**：只要 `summary` 命中界面/交互词族，或显式传了 `purpose=ui-design`，
 返回值里就会出现 `needScreenshots`，明确要求先向用户索取实机截图，并禁止在拿到截图前宣称
 「样式已经对齐」。这个兜底是机器化的 —— 不依赖模型记不记得 `purpose`。
+
+**iOS 侧不走「向用户要图」这条路**：`summary` 命中 iOS 词族（或本机是 macOS）时，
+`needScreenshots` 会改成「先去跑 `kirara_build({ project: 'media', target: 'ios' })`」——
+模拟器自检本来就会出图，让用户手截一遍纯属倒退。在 Windows 上则会明确写「必须交接给 Mac」，
+不允许拿「构建通过」顶替看图。
 
 插件自身不调用模型，只产出「怎么调」的协议 —— 实际的图像请求由模型按协议发起，
 把每张图作为 attachment 发给支持图像输入的模型。这样插件保持无副作用、可以离线自检。
@@ -427,11 +485,13 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 调大这些值等于主动换取更频繁的压缩与更低命中率 —— 真要调，请同时跑
 `node scripts/cache-budget.mjs` 并同步改里面的预算基线。
 
-工具目录本身也在预算内：10 个工具的 `name+description+parameters` 合计 **9061 字节**
+工具目录本身也在预算内：10 个工具的 `name+description+parameters` 合计 **9463 字节**
 （8 个工具时是 6496；新增 `kirara_release` 与 `kirara_release_notes` 带来 +2565，是本插件迄今
-最大的一次目录增长）。这是**一次性常驻**成本（约 +640 token 的前缀），换来的是三端各自的发布现实
-被固化下来 —— 发布原本是「翻技术栈文档找命令 → 手改版本号 → 手动改名 → 手动搬桌面 → 手动算校验码
-→ 忘记写 README」，每一步都能出错，且出错时产物往往已经发出去了。基线卡在 9500 字节。
+最大的一次目录增长；media 双端那次给 `kirara_build` 加 `target` 又加了 +402 —— **只剩 37 字节余量**，
+再想加字先确认值不值一次前缀抖动）。这是**一次性常驻**成本（约 +640 token 的前缀），换来的是
+三端各自的发布现实被固化下来 —— 发布原本是「翻技术栈文档找命令 → 手改版本号 → 手动改名 →
+手动搬桌面 → 手动算校验码 → 忘记写 README」，每一步都能出错，且出错时产物往往已经发出去了。
+基线卡在 9500 字节。
 
 ## 兼容性
 
@@ -580,10 +640,19 @@ desktop 同理走 `publish_all.ps1`，区别是它产出的安装包文件名固
 
 **为什么没有单元测试？**
 这是项目约定：验证方式 = 构建 + 人工真机清单。所以 `kirara_verify` 产出的是分步骤清单，不是测试代码。
+media 的 iOS 侧把这条约定做得更彻底：模拟器自检脚本本身就截图取证，`kirara_build target=ios`
+的产物直接就是复核素材。
 
 **能用 `kirara_build` 验证这个插件自己吗？**
 不能。`kirara_build` 只覆盖 desktop / api / media 三个子项目。插件自身的验证方式是
-`node scripts/deploy.mjs --check` 加完全重启，见[本地开发](docs/local-development.md)。
+`node scripts/deploy.mjs --check` + `node scripts/host-dispatch.mjs`（真宿主派发，证明 10 个工具的
+返回值都被宿主接受）+ 完全重启，见[本地开发](docs/local-development.md)。
+
+**在 Mac 上开发 media 时，插件会替我跑 iOS 构建吗？**
+会，前提是 `kirara_build` 跑在 **Mac 上**：`target` 省略时 macOS 默认 `ios`（= `bash iosApp/run-simulator.sh`），
+直接产出模拟器截图。在 **Windows 上**它只能跑到 klib 门禁，链接 / 出包 / 模拟器自检会以
+`macCommands` 的形式交回 —— 这是设计上的分工，不是能力缺失（Mac 上也没装 Android SDK，
+所以 Android 回归反而必须回 Windows）。
 
 **`kirara_build` 会杀掉我的 `dotnet` 进程吗？**
 不会。插件只运行构建命令，不做任何进程清理。它内置的进程清理红线是给模型看的提示：禁止按进程名
@@ -611,7 +680,7 @@ desktop 同理走 `publish_all.ps1`，区别是它产出的安装包文件名固
 
 - [架构与项目画像](docs/architecture.md) —— 十个工具的实现、路由判定信号、文档同步规则、发布链路、`PROJECTS` 常量怎么维护
 - [DSH 插件契约](docs/plugin-contract.md) —— 插件要怎么写才会被 DSH 认可并加载
-- [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、五个自检夹具
+- [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、四个自检夹具（含真宿主派发）
 - [故障排查](docs/troubleshooting.md) —— 怎么判断插件加载了没，以及几个已经踩过的坑
 
 ## 许可

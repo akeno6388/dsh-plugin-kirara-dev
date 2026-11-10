@@ -115,20 +115,24 @@ git config --global --add 'url.https://github.com/.insteadOf' 'ssh://git@github.
 node scripts\deploy.mjs --enable   # 1) 挂进 bundles（已挂则无操作）
 node scripts\deploy.mjs            # 2) 重新部署最新源码 + 校验不变量
 node scripts\mount-check.mjs       # 3) 挂载路径检查（内部串 contract-test）
-# 4) 完全退出 DSH 再重新启动 —— 然后在「新会话」里验收
+node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 4) 真宿主派发一遍
+# 5) 完全退出 DSH 再重新启动 —— 然后在「新会话」里验收
 ```
 
 **必须开新会话**：旧会话的历史消息里已经录下了修复前的失败工具调用，以及那份残缺的工具名快照，
 旧记录无法修复，只会在新会话里干净地重建。
 
-## 五个自检夹具
+## 自检夹具
+
+按「抓哪一类失败面」分工，四条主力 + 若干专项：
 
 | 脚本 | 覆盖的失败面 | 是否走宿主真实代码 |
 | --- | --- | --- |
 | `selftest.mjs` | 工具**业务逻辑**：注册 + 逐个执行（含一次真实 `dotnet build`）、`mode=docs` 判定的三类反例、`needScreenshots` 兜底、`kirara_docsync` 的变化定性、发布链路（三端 `release_notes` + `dryRun` 计划 + 一个**合成 git 仓库**钉住提交分类与去重规则） | ✗ 假 `ctx.tools` |
 | `deploy.mjs` | **部署形态**：profile 副本 == 源码、profile 里无宿主包副本 | ✗ 只做文件/清单断言 |
 | `mount-check.mjs` | **解析归层**：复现 `routeScoped` 的两锚点判定 + 清单形态 | ✗ 模拟判定 |
-| `contract-test.mjs` | **真实调度链路**：真 `cordis.Context` + 真 `ToolRuntime`，逐个 `prepare()` | ✓ 全真 |
+| `contract-test.mjs` | **真实调度链路**：真 `cordis.Context` + 真 `ToolRuntime`，逐个 `prepare()`。⚠️ **本机宿主上已整段失效** —— 它查的 `TOOL_RUNTIME_SCHEDULER` 从 0.2.2-rc.1 起不再导出，见 [事故六](troubleshooting.md) | ✓ 全真（但取执行器的方式过期） |
+| `host-dispatch.mjs` | **真宿主派发**（顶 `contract-test` 的位置）：真 `Context` + `ToolsService` + `@deepseek-ai/dsh-tool-executor-native`，把 10 个工具挨个派发，含 iOS 分支（`target=ios` 的 `macCommands`、media 的 iOS 验证清单、`profile` 的 `ios` 块） | ✓ 全真（**现行** API） |
 | `cache-budget.mjs` | **前缀缓存预算**：工具目录逐字节稳定 + 描述无易变内容 + 每个工具的返回值不超预算 | ✗ 假 `ctx.tools`（含一次假 `gradlew.bat` 真派发） |
 | `contract-test.mjs` 的 §6.5 | **可选键边界**：`artifact` / `screenshotReview` / `needScreenshots` 三类条件展开键，以及 `mode=docs` 的短路分支 | ✓ 全真 |
 | `contract-test.mjs` 的 §6.7 | **发布链路端到端**：临时仓库 + 假发布脚本，但真找产物、真改名、真搬目录、真算 SHA256、真写 `.sha256`；以及 README 门禁的拦下 / `force` 放行 / 提交后自动放行三段行为 | ✓ 全真 |
@@ -136,8 +140,9 @@ node scripts\mount-check.mjs       # 3) 挂载路径检查（内部串 contract-
 ```powershell
 node scripts\deploy.mjs          # 部署最新源码到 profile + 校验不变量
 node scripts\selftest.mjs        # 工具级自检
+node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 真宿主派发（含 iOS 分支）
 node scripts\mount-check.mjs     # 挂载路径检查（内部会串 contract-test.mjs）
-node scripts\contract-test.mjs   # 只跑真实契约测试
+node scripts\contract-test.mjs   # 真实契约测试（本机宿主上已失效，见事故六）
 node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 输出预算后必跑）
 ```
 
@@ -153,19 +158,20 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 
 | 常量 | 值 | 实测 | 说明 |
 | --- | --- | --- | --- |
-| `toolSchemaBytes` | 9500 | 9065（10 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565 的一次性常驻增量 |
-| `docsRenderChars` | 4400 | 4014 | 宽泛关键词 + `maxHits=40` |
-| `buildRenderChars` | 5600 | 5124 | 200 行 × 400 字符的假构建日志 |
-| `startRenderChars` | 1400 | 1356 | 长需求 + `auto`（含 UI + 文档同步两条额外步骤） |
-| `verifyRenderChars` | 2000 | 1412 | `purpose=ui-design` + 截图，协议最长 |
-| `docsyncRenderChars` | 2500 | 1440 | 三端混合、4 篇目标 |
+| `toolSchemaBytes` | 9500 | 9463（10 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565 的一次性常驻增量。2026-11 的 media 双端（`kirara_build` 的 `target`）再加 +402，**只剩 37 字节余量** —— 想再往 description 里加字，先确认值不值一次前缀抖动 |
+| `docsRenderChars` | 4400 | 3874 | 宽泛关键词 + `maxHits=40` |
+| `buildRenderChars` | 5600 | 5197 | 200 行 × 400 字符的假构建日志 |
+| `startRenderChars` | 1400 | 1302 | 长需求 + `auto`（含 UI + 文档同步两条额外步骤）。iOS 那条步骤只在命中 `IOS_SIGNALS` 时出现，本用例不计入 |
+| `verifyRenderChars` | 2000 | 1442 | `purpose=ui-design` + 截图，协议最长 |
+| `verifyIosRenderChars` | 2100 | 1979 | media 的 **iOS** 清单（模拟器自检 + DeviceHub 两步比 Android 多）；这条路径在 Windows 上也能被夹具走到（summary 里带 iOS 词即可），因为 `screenshotReview.instruction` 是要被原样执行的提示词，被截断即失效 |
+| `docsyncRenderChars` | 2500 | 1505 | 三端混合、4 篇目标 |
 | `narrativeHardCap` | 2400 | 2444（含截断说明） | `textBudgetChars` 默认值；原 1600，因为 UI 设计复核协议被截断即失效 |
-| `releaseNotesRenderChars` | 3600 | 3243 | `releaseNotesBudgetChars`（3200）+ 头部；取后端仓库这个最大区间 |
-| `releaseRenderChars` | 3400 | 450 | `releaseBudgetChars`（3000）+ 头部；`dryRun` 计划 |
-| `releaseNotesHardCap` / `releaseHardCap` | 3200 / 3000 | 3243 / 3044 | 这两个是有意做得比 `narrativeHardCap` 宽的：产出是提交清单与步骤表，压到 2400 会把「需人工判断」桶整个挤掉 |
+| `releaseNotesRenderChars` | 3600 | 2590 | `releaseNotesBudgetChars`（3200）+ 头部；取后端仓库这个最大区间 |
+| `releaseRenderChars` | 3400 | 251 | `releaseBudgetChars`（3000）+ 头部；`dryRun` 计划 |
+| `releaseNotesHardCap` / `releaseHardCap` | 3200 / 3000 | 3244 / 3044 | 这两个是有意做得比 `narrativeHardCap` 宽的：产出是提交清单与步骤表，压到 2400 会把「需人工判断」桶整个挤掉 |
 
-`kirara_start` 的 1400 只剩 44 字符余量：往 `steps` 里再加一条就会红。
-这是有意的 —— 流程说明每次调用都会重放进上下文，它是最该被盯住的一段。
+`kirara_start` 的 1400 只剩 98 字符余量；`kirara_profile`（夹具里内联的 1200）实测 1129。
+往 `steps` 里再加一条就会红，这是有意的 —— 流程说明每次调用都会重放进上下文，它是最该被盯住的一段。
 
 ### 为什么 `contract-test.mjs` 才是关键
 
@@ -213,6 +219,30 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 第 6.5 节用**临时 workspaceRoot + 假 `gradlew.bat`** 把 `kirara_build` 真派发一遍
 （毫秒级、不碰任何真实工具链），因为「构建完成但没有产物」正是 media 的真实失败面。
 它同时把其他 6 个工具也真派发一次 —— 返回值边界是全工具的共性约束。
+
+### ⚠️ 这份夹具在 0.2.2-rc.1 起的宿主上会整段红
+
+上面第 2 节的两行 `TOOL_RUNTIME_SCHEDULER 可解析且带 prepare()` 就是分水岭：宿主把执行路径改成了
+`ToolsService.setExecutor()` + `@deepseek-ai/dsh-tool-executor-native`，那个符号不再导出 ⇒
+`ctx.tools[TOOL_RUNTIME_SCHEDULER]` 恒为 `undefined`，后面所有 `prepare()` 全崩。
+**还原 `lib/impl.js` 到 HEAD 也一样红**，所以它不是插件回归。诊断与处理见
+[troubleshooting 事故六](troubleshooting.md)。
+
+该位置现在由 `host-dispatch.mjs` 顶替（现行 API，真派发）：
+
+```text
+=== 被测对象 ===
+  插件入口  : …\profiles\desktop-017\node_modules\@kirara\dsh-plugin-kirara-dev\lib\impl.js（profile 已部署副本）
+  宿主包目录: …\EduWork-ECNU\resources\product\d\node_modules
+  ✓ 真实 cordis Context + ToolsService + native 执行器已就位
+
+=== 真宿主派发 11 次（含 iOS 分支）===
+  ✓ kirara_profile({"project":"media"}): 宿主接受返回值
+  ✓ kirara_build({"project":"media","target":"ios-klib"}): 宿主接受返回值
+      ❌ 构建失败 — media(ios-klib)  (0.1s, exit=9009)      ← 本机没 JDK；业务失败，契约仍成立
+  …
+✅ 真宿主全部接受（可选键均按条件展开，无显式 undefined）
+```
 
 ## `selftest.mjs` 输出样例
 
@@ -263,5 +293,23 @@ ok = true  exit = 0  duration = 2.3s
 | 想验证自更新链路本身 | `node scripts/update-e2e.mjs`（离线，18 项断言）、`node scripts/update-live-check.mjs`（联网打真 GitHub）、`node scripts/check-kernel-parity.mjs`（两仓库内核一致） |
 | 想验证插件管理页里的控件 | `node scripts/client-panel-test.mjs`（无浏览器；`--dump` 直接打印会渲染出的 HTML） |
 
-**改完在任何会话里都建议先跑一遍三条夹具**：`selftest` 抓业务逻辑、`contract-test --from source` 抓真实
-调度链路、`cache-budget` 抓前缀缓存。三条都过再部署，能省掉一轮「重启 DSH 才发现又崩了」。
+**改完在任何会话里都建议先跑一遍四条夹具**：`selftest` 抓业务逻辑、`cache-budget` 抓前缀缓存与输出预算、
+`host-dispatch` 抓「真宿主接受返回值」、`contract-test --from source` 抓调度链路契约
+（本机宿主上这份因 `TOOL_RUNTIME_SCHEDULER` 已废弃而整段失败 —— 见
+[troubleshooting 事故六](troubleshooting.md#事故六contract-test-在本机宿主上整段失败与插件改动无关)，
+用 `host-dispatch` 顶它的位置）。前三条都过再部署，能省掉一轮「重启 DSH 才发现又崩了」。
+
+```powershell
+node --no-warnings scripts/selftest.mjs
+node --no-warnings scripts/cache-budget.mjs
+node --no-warnings scripts/host-dispatch.mjs --host <宿主 node_modules 绝对路径>
+node scripts/deploy.mjs          # 部署
+node scripts/deploy.mjs --check  # 确认 profile 副本与源码逐字节一致
+```
+
+`--no-warnings` 不是洁癖：Node 的 `DEP0190`（fixture 里的 `spawn(..., { shell: true })`）写在 stderr，
+PowerShell 会把它当成失败，把成功的夹具判成红的。
+
+`host-dispatch.mjs` 需要宿主包目录 —— 插件自己没有 `node_modules`，宿主包由 DSH 运行时拦截提供。
+本机是 `C:\Users\lpais\EduWork-ECNU\resources\product\d\node_modules`；也可以设 `DSH_HOST_NODE_MODULES`。
+它默认测 **profile 里已部署的副本**（那才是会话真正加载的东西），`--from source` 才测源码树。
