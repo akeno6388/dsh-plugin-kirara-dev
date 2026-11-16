@@ -43,10 +43,14 @@ const WORKSPACE_ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(
  *     手动搬桌面 → 手动算校验码 → 忘记写 README」，每一步都能出错且出错时产物已经发出去了；
  *     把三端各自的发布现实（脚本 / 产物命名 / 校验码 / 前置条件 / README 门禁）固化成工具，
  *     换掉的是一整类不可逆的事故。卡在 9500 是为了抓回归。
+ *   2026-11 第四轮（分章文档层）：10 个工具 10156 字节（+903）。增量来自 kirara_docs 的
+ *     mode/chapter/section 参数与 kirara_docsync 的章节/插入计划描述。换掉的是「整篇 258 KB
+ *     文档塞上下文」与「文档写错位置」——分章集要先 map 再 section，才能既省 token 又能稳定定位。
+ *     卡在 10400（仍比一次 compaction 的代价小两个数量级）。
  */
 const BUDGET = {
   /** 10 个工具的 name+description+parameters JSON 总字节上限。 */
-  toolSchemaBytes: 9500,
+  toolSchemaBytes: 10400,
   /** kirara_docs 单次 render 的字符上限（插件默认 docsBudgetChars=4000 + 截断提示）。 */
   docsRenderChars: 4400,
   /** kirara_build 单次 render 的字符上限（buildBudgetChars=5000 + 头部状态行）。 */
@@ -191,6 +195,10 @@ const checks = [
   // 关键词故意选宽泛词，逼近最坏情况
   ['kirara_docs（宽泛关键词，最坏情况）', 'kirara_docs', { keywords: ['服务', '接口', '实例', '主题'] }, BUDGET.docsRenderChars],
   ['kirara_docs（maxHits 拉满 40）', 'kirara_docs', { keywords: ['a', 'e', 's'], maxHits: 40 }, BUDGET.docsRenderChars],
+  // 分章文档层：map 一次铺 12 章 + 每章前 3 节；section 读一整节（body 上限 docsBudget-300）。
+  ['kirara_docs（map，desktop 分章集）', 'kirara_docs', { mode: 'map', project: 'desktop' }, BUDGET.docsRenderChars],
+  ['kirara_docs（map，展开 03 章）', 'kirara_docs', { mode: 'map', project: 'desktop', chapter: '03' }, BUDGET.docsRenderChars],
+  ['kirara_docs（section，auth 整节）', 'kirara_docs', { mode: 'section', project: 'desktop', section: 'auth' }, BUDGET.docsRenderChars],
   ['kirara_start（长需求 + full）', 'kirara_start', {
     request: '删掉旧的评论表并重构为分表存储，同时把设置页的登录迁移到新 API，需要改表结构与索引，并调整首页与详情页的交互与配色',
     mode: 'full',
@@ -250,7 +258,8 @@ for (const [label, name, args, budget] of checks) {
     ok(`${label}: ${text.length} ≤ ${budget} 字符`);
   }
   // workspaceRoot 指错时 kirara_docs 扫不到任何文档，docs 预算就只是空跑。
-  if (name === 'kirara_docs' && (value.hits?.length ?? 0) === 0) {
+  // map/section 的 hits 天然为 0，不适用这条告警。
+  if (name === 'kirara_docs' && (args.mode ?? 'search') === 'search' && (value.hits?.length ?? 0) === 0) {
     console.log(`      ⚠️ 本次 0 命中 —— 文档预算未被真正压到（workspaceRoot=${WORKSPACE_ROOT}，扫描 ${value.scannedFiles} 个文件）`);
   }
 }

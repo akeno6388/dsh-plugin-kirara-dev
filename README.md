@@ -26,11 +26,11 @@
 | --- | --- |
 | `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题。`mode=auto` 会在 `docs` / `full` / `small` 之间判定 |
 | `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读那些几百 KB 的技术文档 |
-| `kirara_docs` | 在技术文档里按关键词检索，返回 `文件:行号` 和所属章节 |
+| `kirara_docs` | **分章文档检索**。`mode=map` 先看章节地图（章 / 小节 / 显式锚点 / 结构审计），`mode=search` 按关键词返回 `文件:行号` + 所属章/节/锚点，`mode=section` 用 `03.2` 或 `#auth` 只读单节 |
 | `kirara_route` | 把一句话需求展开成路线：涉及端、执行步骤、决策点 |
 | `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部。media 是双端，`target` 可选 `android` / `ios-klib` / `ios-framework` / `ios`（`ios` 会跑模拟器自检并直接产出 UI 截图） |
 | `kirara_verify` | 产出分步的真机验收清单（步骤 + 预期结果）；传入截图路径可以额外拿到一段视觉复核协议，`purpose=ui-design` 时给的是「该怎么改」的 P0/P1 修改建议 |
-| `kirara_docsync` | **文档同步**。自行判断本轮改动属于新功能 / BUG 修复 / 界面改动 / 纯内部整理，产出该更新的文档清单（哪几篇 + 哪些章节 + 逐条清单） |
+| `kirara_docsync` | **文档同步**。自行判断本轮改动属于新功能 / BUG 修复 / 界面改动 / 纯内部整理，按 `frontmatter.files` + 标题关键词选章、选节，产出**插入位置**（改哪节，或在第几行新增 `## NN.M` + 锚点）、frontmatter 补文件、99 变更记录条目与写作规范 |
 | `kirara_release_notes` | **发布素材**。取「上个版本 tag → HEAD」的全部提交，按「新增功能 / 修复 / 内部整理 / 需人工判断」分好桶，并核验 README 是否跟上本轮 |
 | `kirara_release` | **发布**。跑仓库自带的发布脚本（api 走技术栈文档里的 docker 命令）打包，产物按 `_v<版本>` 命名搬到桌面，生成 SHA256 校验文件。`dryRun` 只出计划 |
 | `kirara_summary` | 汇总本轮变更、构建结论、验证状态、**已同步的文档**、遗留风险 |
@@ -69,6 +69,42 @@
 `mode=docs` 下 `kirara_start` 的步骤只有四步（检索 → 编辑 md → 文档同步 → 收尾），
 不给构建命令，`kirara_verify` 也会以 `skipped` 收场。
 
+### 分章技术栈文档：先看地图，再读单节
+
+2026-11 起，技术栈文档从「一篇 258 KB 的大 md」改成按模块分章（`Kirara_Server_Studio` 已落地，
+`Kirara_Media` 正在迁移）：
+
+```text
+Kirara_Server_Studio/docs/技术栈文档/
+├── 01-总览与架构.md          # frontmatter: module / level / files / related
+├── 02-启动与外壳.md          # # 02 启动与外壳
+│                             #   <a id="shell-page"></a>
+│                             #   ## 02.2 ShellPage 架构
+├── …
+├── 14-附录-清单总表.md
+└── 99-变更记录.md            # 只写流水，日期倒序
+```
+
+这种结构对 AI 检索的价值在**两层导航**：先拿到「有哪几章、每章有哪些节、每节的稳定锚点」，
+再只读一个小节；而不是把整篇文档塞进上下文。`kirara_docs` 因此有三种模式：
+
+| 模式 | 用途 | 返回 |
+| --- | --- | --- |
+| `mode=map`（不确定先看这个） | 章节目录 + 每章前几个小节 + 锚点；`chapter: '03'` 展开该章全部小节与行号 | 章 / 节 / 锚点 / 结构审计 |
+| `mode=search`（默认） | 关键词命中行 | `文件:行号` + 所属章 + 小节（`03.2 账号设置`）+ 锚点 |
+| `mode=section` | 只读一节 | `section: '03.2'`、`'auth'` 或标题片段；返回该节正文与行范围 |
+
+检索不是「全文 grep + 行号」：命中行会按「章标题 / 小节标题 / frontmatter.files / 正文」加权，
+所以问「登录」时 `03.1 认证系统` 的正文会排在 99 变更记录的历史条目之前；`99` 只作为历史证据降权。
+
+**发现规则不写死路径**：任何项目下 `docs/` 或 `app/docs/` 里，只要某个目录同时有 ≥2 个
+`NN-标题.md`（01–89），就自动当成一个分章文档集。所以新增项目 / 新增章节不需要改插件；
+`PROJECTS` 里仍要登记该端的仓库目录与 `techDocs`（或让它按 `docs` 目录自动发现）。
+结构约定与插入模板见 [分章文档写作规范](docs/doc-conventions.md)。
+
+`mode=map` 末尾还会带**结构审计**：缺 frontmatter、`##` 未编号、锚点重复、跨文档断链、
+`related` 指向不存在的文件。这些是「下一轮 AI 会读错/写错」的硬伤，不是排版洁癖。
+
 ### 代码改完，文档也要跟上（`kirara_docsync`）
 
 这是流程的常规一步：**构建验证 → 实机测试 → 文档同步 → 总结**。新功能和 BUG 修复都会改变对外行为，
@@ -91,19 +127,32 @@ kirara_docsync({
 | `docs` | 文档动作 + 文档对象 | 本身就是文档工作 |
 | `chore` | 格式化 / lint / 重命名变量 / 清死代码 | 不要求改正文，更新记录留一条即可 |
 
-然后按「变化特征 → 文档」的规则表挑出该更新的文档（各端 `docs/` 下的技术栈文档、`Kirara Server API 完整文档.md`、
-`README.md` …），并读那几篇文档的标题，给出**具体章节**与逐条清单：
+然后按「变化特征 → 文档」的规则表挑出该更新的文档。分章文档集走另一条更精确的路：
+
+1. **改动路径 → 章**：`frontmatter.files` 里的 `Services/RemoteCommentService.cs` 命中 `11-社区与内容.md`；
+   `Views/Comment/CommentPanel.xaml` 命中同一章。路径匹配（含 `Views/Page.xaml(.cs)` 这种成对写法）是强信号。
+2. **标题/小节关键词 → 章与节**：没有路径命中时，用 feature 词与 01–99 的章标题、`##` 小节标题比对。
+3. **给插入计划**：命中既有小节 ⇒ 改哪一节（行号）；没有 ⇒ 在章末新增 `## NN.(M+1)`，
+   并给出建议锚点、插入行号；**BUG 修复不新开小节**（修的是旧描述，落点是改写既有段落，流水只进 99）。
+4. **补 frontmatter.files**：本次改到的源文件若不在该章 `files:` 里，会列出来。
+5. **99 变更记录**：单卷 99 ⇒ 在引言后插入 `## YYYY-MM-DD · 标题`；多卷 99（`99-变更记录/01…卷`）
+   ⇒ 追加到**最新卷**末尾，编号取所有卷历史条目最大值 +1，并提示同步 `00-索引与编号映射.md`。
+
+真实输出（节选）：
 
 ```text
 📄 文档同步 [ui] —— 需更新 2 篇
 判定: 界面/交互改动 —— 界面契约（入口、状态、主题）变了，技术栈文档要跟上
 目标:
-  - Kirara_Server-API/docs/Kirara Server API 完整文档.md
-      章节: 三、评论系统 API (/api/comments) / 3.4 获取评论列表（分页） / 更新记录
-      为什么: 接口/鉴权行为变化 ⇒ API 完整文档的对应章节 + 「更新记录」
-清单:
-  - ... → 改「三、评论系统 API (/api/comments) / 更新记录」
-  - 逐篇核对文档里的命令 / 路径 / 版本号 / 端口 / 端点是否仍与代码一致
+  - Kirara_Server_Studio/docs/技术栈文档/11-社区与内容.md  [11 社区与内容]
+      改「11.1 议题评论」
+      为什么: 功能 / 交互行为变化 ⇒ 技术栈文档的落地记录章节
+  - Kirara_Server_Studio/docs/技术栈文档/99-变更记录.md
+      在引言之后、最新条目之前（第 5 行后）插入「## 2026-11-16 · 新增评论 @ 提醒功能」+ 一条变更点
+写法:
+  - 章节文件 `NN-标题.md`：新增模块取下一个空号；H1 用 `# NN 标题`；frontmatter 写 module / level / files / related。
+  - 小节 `## NN.M 标题`，编号在本章内连续；标题前一行加 `<a id="slug"></a>`；跨文档链接只认显式锚点。
+  - 正文只写稳定结论；本轮改了什么只进 99 变更记录，正文不写「本轮」。
 ```
 
 它只**判断与规划**，不替模型写文档 —— 真正的编辑仍由模型用 `write`/`edit` 完成。
@@ -372,8 +421,12 @@ md 不参与编译，也没有可验的东西。
 ```
 kirara_profile({})                                 // 三端画像
 kirara_profile({ project: 'api' })                 // 只看 API 端
+kirara_docs({ mode: 'map', project: 'desktop' })      // 先看章节地图（含结构审计）
+kirara_docs({ mode: 'map', project: 'desktop', chapter: '03' }) // 展开 03 章的小节与行号
 kirara_docs({ keywords: ['MinIO', '预签名'] })      // 跨文档检索
 kirara_docs({ keywords: ['评论'], project: 'api' }) // 限定单个子项目
+kirara_docs({ mode: 'section', project: 'desktop', section: 'auth' }) // 只读 03.1（按锚点）
+kirara_docs({ mode: 'section', project: 'desktop', section: '03.2' }) // 按 NN.M 读单节
 kirara_build({ project: 'media' })                 // Android 端（Windows 默认）
 kirara_build({ project: 'media', target: 'ios' })   // iOS：模拟器自检 + 截图（仅 macOS）
 kirara_build({ project: 'media', target: 'ios-klib' })  // iOS 侧最快门禁（Windows 也能跑）
@@ -446,7 +499,7 @@ kirara_verify({
 | `buildBudgetChars` | `5000` | `kirara_build` 单次返回的字符总预算；超出时先保 `errors`，再保日志尾部 |
 | `docsMaxHits` | `12` | `kirara_docs` 默认返回的命中行数 |
 | `docsLineChars` | `200` | `kirara_docs` 命中行的正文字符上限 |
-| `docsBudgetChars` | `4000` | `kirara_docs` 单次返回的字符总预算 |
+| `docsBudgetChars` | `4000` | `kirara_docs` 单次返回的字符总预算（search / map / section 共用；section 的正文上限为该值 − 300） |
 | `textBudgetChars` | `2400` | 叙述型工具（start/route/profile/verify/summary）单次返回的字符总预算。原为 1600，抬高的原因是 UI 设计复核协议**要被原样执行**，截断即失效 |
 | `docsyncBudgetChars` | `2400` | `kirara_docsync` 单次返回的字符总预算 |
 | `docsyncMaxTargets` | `4` | `kirara_docsync` 最多推荐几篇文档 |
@@ -485,20 +538,21 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 调大这些值等于主动换取更频繁的压缩与更低命中率 —— 真要调，请同时跑
 `node scripts/cache-budget.mjs` 并同步改里面的预算基线。
 
-工具目录本身也在预算内：10 个工具的 `name+description+parameters` 合计 **9463 字节**
+工具目录本身也在预算内：10 个工具的 `name+description+parameters` 合计 **10156 字节**
 （8 个工具时是 6496；新增 `kirara_release` 与 `kirara_release_notes` 带来 +2565，是本插件迄今
-最大的一次目录增长；media 双端那次给 `kirara_build` 加 `target` 又加了 +402 —— **只剩 37 字节余量**，
-再想加字先确认值不值一次前缀抖动）。这是**一次性常驻**成本（约 +640 token 的前缀），换来的是
-三端各自的发布现实被固化下来 —— 发布原本是「翻技术栈文档找命令 → 手改版本号 → 手动改名 →
-手动搬桌面 → 手动算校验码 → 忘记写 README」，每一步都能出错，且出错时产物往往已经发出去了。
-基线卡在 9500 字节。
+最大的一次目录增长；media 双端那次给 `kirara_build` 加 `target` 又加了 +402；2026-11 的分章文档层
+给 `kirara_docs` 加 `mode/chapter/section`、给 `kirara_docsync` 加章节/插入计划描述，合计 +903）。
+这是**一次性常驻**成本（约 +640 token 的前缀），换来的是三端各自的发布现实被固化下来 —— 发布原本是
+「翻技术栈文档找命令 → 手改版本号 → 手动改名 → 手动搬桌面 → 手动算校验码 → 忘记写 README」，
+每一步都能出错，且出错时产物往往已经发出去了；分章文档层又换掉了「整篇 258 KB 文档塞上下文」
+与「文档写错位置」。基线卡在 10400 字节（仍比一次 compaction 的代价小两个数量级）。
 
 ## 兼容性
 
 `peerDependencies` 声明为 `@deepseek-ai/dsh-tools@^0.2.0-rc.2`，覆盖 DSH 0.2.x 全系列
 （`0.2.0-rc.2` / `0.2.0` / `0.2.1` 均可用）。
 
-`0.3.0` 起会被判 incompatible 并自动禁用。换大版本后如果仍想用，需要 `dsh plugin allow-version`
+`0.3.0` 起的 **DSH** 会被判 incompatible 并自动禁用。换大版本后如果仍想用，需要 `dsh plugin allow-version`
 显式授权 —— 插件没有针对新版本测过，有崩溃风险。
 
 ## 升级
@@ -561,6 +615,17 @@ node scripts\deploy.mjs
 那是故意的。界面改动的验收标准是「看起来对不对」，而构建通过只证明能编译。
 `kirara_verify` 只要发现 `summary` 命中界面/交互词族就会返回 `needScreenshots`，
 要求先拿到实机截图；拿到图后用 `purpose: 'ui-design'` 换回一份 P0/P1 的修改清单。
+
+**技术栈文档变成很多小文件了，`kirara_docs` 还能搜到吗？**
+能，而且比单篇大文件更准。它自动发现 `docs/`（或 `app/docs/`）下含 ≥2 个 `NN-标题.md` 的分章集，
+命中结果会带章、小节编号与显式锚点；先 `mode=map` 看目录，再 `mode=section` 读单节，比整篇 grep 省上下文。
+新增项目或新增章节不用改插件，只要目录符合分章约定（见[分章文档写作规范](docs/doc-conventions.md)）。
+
+**自动写技术栈文档会不会把内容写到错的地方？**
+`kirara_docsync` 给的是**插入计划**而不是一句「更新技术栈文档」：改哪一章、改哪一节（带行号）、
+或在本章末尾新增 `## NN.M`（带建议锚点和行号）、frontmatter.files 补哪些源文件、99 变更记录写在
+第几行；BUG 修复还会明确禁止新开「修复 XXX」小节。改完后可以用 `kirara_docs({ mode: 'map' })`
+末尾的结构审计复查断链 / 编号 / 缺 frontmatter。
 
 **`kirara_docsync` 是不是每轮都得改文档？**
 不是。它会先给变化定性：`chore`（格式化、lint、重命名变量、清死代码）明确返回「不需要改正文」；
@@ -678,7 +743,8 @@ media 的 iOS 侧把这条约定做得更彻底：模拟器自检脚本本身就
 
 ## 文档
 
-- [架构与项目画像](docs/architecture.md) —— 十个工具的实现、路由判定信号、文档同步规则、发布链路、`PROJECTS` 常量怎么维护
+- [架构与项目画像](docs/architecture.md) —— 十个工具的实现、分章文档层、路由判定信号、文档同步规则、发布链路、`PROJECTS` 常量怎么维护
+- [分章文档写作规范](docs/doc-conventions.md) —— 目录/编号/frontmatter/锚点/插入模板/审计规则；换项目时照这份约定即可无缝接入
 - [DSH 插件契约](docs/plugin-contract.md) —— 插件要怎么写才会被 DSH 认可并加载
 - [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、四个自检夹具（含真宿主派发）
 - [故障排查](docs/troubleshooting.md) —— 怎么判断插件加载了没，以及几个已经踩过的坑

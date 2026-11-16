@@ -117,7 +117,14 @@ const cases = [
   ['kirara_start', { request: '在 Mac 上调整 iOS 登录页的按钮间距' }],
   ['kirara_route', { request: 'iOS 模拟器上验证 WKWebView 桥', mode: 'full' }],
   ['kirara_docs', { keywords: ['DeviceHub'], project: 'media', maxHits: 4 }],
+  // 分章文档层：map / section / 章节+插入计划三种返回分支（可选键不同）。
+  ['kirara_docs', { mode: 'map', project: 'desktop' }],
+  ['kirara_docs', { mode: 'section', project: 'desktop', section: 'auth' }],
   ['kirara_docsync', { feature: 'iOS 端 WKWebView 桥接修复', project: 'media' }],
+  ['kirara_docsync', {
+    feature: '新增扫码登录',
+    changes: ['Kirara_Server_Studio/Services/RemoteLoginService.cs'],
+  }],
   ['kirara_summary', { feature: '宿主派发回归', mode: 'full', changes: ['lib/impl.js'] }],
   ['kirara_release_notes', { project: 'media' }],
 ];

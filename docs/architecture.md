@@ -21,6 +21,7 @@ dsh-plugin-kirara-dev/
 │   ├── deploy.mjs
 │   ├── mount-check.mjs
 │   ├── contract-test.mjs
+│   ├── doc-layer-test.mjs     # 分章文档层：发现 / map / search / section / 选章 / 插入计划 / 审计
 │   ├── cache-budget.mjs       # 前缀缓存回归：工具目录逐字节稳定 + 返回值预算
 │   ├── update-e2e.mjs         # 自更新端到端（离线假 GitHub + 真 cordis + 真引导层）
 │   ├── update-live-check.mjs  # 自更新真实链路（联网打真 GitHub）
@@ -64,7 +65,8 @@ DSH 的请求按「最长相同前缀」复用 provider 缓存。插件能影响
 | `title` / `stack` / `tfm` | 显示用的名称、技术栈、目标框架 |
 | `build` / `publish` / `run` | 命令与参数，`{ cmd, args }` |
 | `specs` | 解决方案文件 |
-| `docs` | 该端相关的技术文档路径。`kirara_start` 按这个列表推荐要读的文档，`kirara_docsync` 把它当作「该同步哪些文档」的候选来源 —— 所以**只列真实存在的文件**，列了不存在的路径只会产出死链推荐 |
+| `docs` | 该端相关的技术文档路径（文件或**分章集目录**）。`kirara_start` 按这个列表推荐要读的文档，`kirara_docs` 从这个范围检索 —— 所以**只列真实存在**的路径 |
+| `techDocs` | 该端的「技术栈主文档」：分章集目录（如 `docs/技术栈文档`）或单篇（如 `docs/服务端后端系统技术栈.md`）。`kirara_docsync` 的 `@tech` 规则与兜底都落在它上面 |
 | `constraints` | 该端的硬约束，会随 `kirara_profile` 一起返回 |
 | `ios` | **仅 media 有**：双端里 iOS 那一半的事实（`targets` / `versionLock` / `klibTasks` / `linkTasks` / 自检脚本 / 模拟器与 bundleId / 截图落点 / `pitfalls` / `docs`）。详见[media 的 iOS 半边](#media-的-ios-半边跨两台机器的一条链) |
 | `apk` | 仅 media 有，构建产物路径，`kirara_build` 用它判断产物是否真的生成 |
@@ -212,6 +214,88 @@ docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
 
 `request` 为空时不猜，直接返回 `blocked: true` 和一条追问性质的 `decisions`，让调用方先问清楚。
 
+## 分章文档层（2026-11）
+
+### 为什么单独一层
+
+2026-11 起技术栈文档从「一篇 258 KB 的 md」改成 `docs/技术栈文档/NN-标题.md` 分章集。
+这不是排版偏好：单文件整篇读会挤爆上下文，只做关键词 grep 又会丢失「命中行属于哪个模块/小节」。
+分章集要回答三个问题，而这三个都不是纯文本搜索能给的：
+
+1. 这本书有哪几章、每章有哪些节、每节的稳定锚点是什么？
+2. 本次改动的源文件对应哪一章（而不是靠关键词猜）？
+3. 新内容应该插到哪一章、哪一节、第几行？
+
+`lib/impl.js` 里的「分章文档层」就是这三个问题的实现。它不新增工具（工具目录是前缀缓存的一部分，
+加一个工具要付一次整段前缀作废的代价），而是给 `kirara_docs` 加 `mode`，给 `kirara_docsync` 加章节计划。
+
+### 发现规则（不写死路径）
+
+`collectProjectDescriptors(base, p)`：
+
+- 扫项目的 `docs/` 与 `app/docs/`，最多 2 层；
+- 某目录同时有 **≥2 个 `NN-标题.md`（01–89）** ⇒ 一个分章集；
+- `99-变更记录/` 是流水卷目录，不参与模块章判定；其文件作为 `changelog`；
+- `_` 开头的文件是规范/临时文件，不参与正文检索；`README.md` 作为入口元信息；
+- `PROJECTS.docs` 里登记的目录也按同一规则展开。
+
+因此新增章节、拆分模块、换项目都不需要改插件；只要目录符合[写作规范](doc-conventions.md)。
+单篇文档（API 完整文档、media 旧技术栈文档）仍按文件级处理，两种形态可以共存。
+
+### 索引与缓存
+
+`getProjectDocs(base, p)` 把每个文件解析成：
+
+```js
+{
+  num, chapterTitle, module, level,
+  frontmatterFiles, related,
+  hasFrontmatter, isChangelog, isAppendix,
+  sections: [{ num, title, line, endLine, anchor, subheadings }],
+  anchors, anchorSet, links, lines
+}
+```
+
+- frontmatter 用极简 YAML 解析（key: value / 行内数组 / 缩进 `-` 列表），不引入 YAML 依赖；
+- `## NN.M` 解析后把编号从 `title` 剥掉，展示层统一拼 `${num} ${title}`，避免「03.1 03.1」；
+- 锚点在标题**前后 2 行内**关联（兼容 `anchor` 在标题前、空行、标题后三种现有写法）；
+- 索引按「路径 + mtime + size」失效：改完 md 下一次调用立刻看到新结构，不用重启；
+- 每个进程一份缓存，不落盘 —— 文档结构是仓库事实，缓存只是省重复 IO。
+
+### `kirara_docs` 的三种模式
+
+| 模式 | 数据 | 渲染 |
+| --- | --- | --- |
+| `map` | 每个分章集的 `chapters`（含 sections/anchors）+ changelog 摘要 + 单篇文档 + `warnings` | 章标题 + 前 3 个小节；`chapter` 参数展开该章全部小节与行号；末尾结构审计 |
+| `search` | 命中行 + `chapter` / `section` / `anchor`；按章标题、小节标题、frontmatter.files、正文加权；99 降权 | `文件:行号 [章 › 节] #anchor` + 该行 |
+| `section` | 按 `NN.M`、`#anchor`、标题片段找唯一小节；返回正文（上限 `docsBudget - 300`） | 标题 + 行范围 + 锚点 + 正文 |
+
+`search` 的加权顺序是刻意的：命中章标题/小节标题、或命中 `frontmatter.files` 里的文件，
+比命中正文更可能是「该读这一节」；`99` 是历史证据，减权后仍可按需检索，但不会淹没稳定结论。
+`map` / `search` / `section` 共用 `docsBudgetChars`，超预算时提示收窄方式（`project` / `chapter` / `file` / 换 `section`）。
+
+### 结构审计
+
+`auditChapterSet()` 在索引构建时跑一次，`map` 返回最多 8 条：
+
+| code | 检查 |
+| --- | --- |
+| `frontmatter` | 模块章缺 frontmatter（99 豁免） |
+| `h1-number` | H1 未以章号开头 |
+| `section-number` | `##` 小节未按 `NN.M` 编号 |
+| `duplicate-anchor` | 同一文档集内锚点重复 |
+| `broken-link` / `broken-anchor` | 跨文档链接目标文件/锚点不存在 |
+| `broken-related` | `related` 指向不存在的 `.md` |
+
+只报「下一轮会读错/写错」的问题，不做排版检查；条数上限与去重避免把 map 输出本身撑爆。
+
+### 与 `PROJECTS` 的衔接
+
+- `PROJECTS.desktop.docs` 写目录 `docs/技术栈文档`（不是某一篇）：`kirara_start` 会按请求关键词
+  选 1–3 章推荐，`kirara_profile` 只显示「N 章 + 用 map 展开」；
+- `PROJECTS.desktop.techDocs` 指向同一个分章集，供 `kirara_docsync` 的 `@tech` 规则解析；
+- 单篇形态（api / media 当前）仍让 `techDocs` 指向那一篇文件，规则表不用分叉。
+
 ## 文档同步（`kirara_docsync`）
 
 为什么单独成节：`docs/` 下的 md 是**下一个会话的作业依据**（技术栈文档的构建与硬约束、API 文档的端点表、
@@ -239,24 +323,37 @@ docsOnly = A ∧ (B ∨ C) ∧ (¬D ∨ C)
 | 规则 | 触发特征 | 目标文档 |
 | --- | --- | --- |
 | `api-surface` | 接口 / 端点 / api / controller / 鉴权 / jwt / signalr | api：`docs/Kirara Server API 完整文档.md` |
-| `stack` | 技术栈 / 依赖 / 框架 / 版本 / sdk / nuget / gradle / postgres / redis / minio，以及**约束 / 构建 / slnx / x64 / assemble / 权限 / 红线** | 各端技术栈文档（构建命令与硬约束的权威落点） |
-| `ios-side` | `IOS_SIGNALS`：ios / iphone / ipad / xcode / swiftui / simctl / wkwebview / devicehub / 模拟器 / 双端 | media：主技术栈文档（§64–§69 的实测事实）+ `app/docs/Kirara Media iOS P0 Mac 执行清单.md`（Mac 环境与坑）。**两者都不能省** —— 只改前者会让下一轮重新踩 Xcode/JAVA_HOME/DeviceHub 的坑 |
-| `requirement` | 需求 / 功能 / 交互 / 流程 / 界面 / 首页 / 评论 / 设置 / 登录 | desktop：`docs/技术栈文档.md`（原 `需求文档.md` 已删除、内容并入其中）；media：技术栈文档 |
+| `stack` | 技术栈 / 依赖 / 框架 / 版本 / sdk / nuget / gradle / postgres / redis / minio，以及**约束 / 构建 / slnx / x64 / assemble / 权限 / 红线** | 各端 `@tech`（分章集则按本次改动选章） |
+| `ios-side` | `IOS_SIGNALS`：ios / iphone / ipad / xcode / swiftui / simctl / wkwebview / devicehub / 模拟器 / 双端 | media：`@tech` + `app/docs/Kirara Media iOS P0 Mac 执行清单.md`。**两者都不能省** —— 只改前者会让下一轮重新踩 Xcode/JAVA_HOME/DeviceHub 的坑 |
+| `requirement` | 需求 / 功能 / 交互 / 流程 / 界面 / 首页 / 评论 / 设置 / 登录 / 令牌 / 实例 / 账号 / 认证 / 加密 / 方案 / 消息 / 主题 / 远程 | 各端 `@tech` |
 | `readme` | 安装 / 用法 / 发版 / 版本号 / 下载 / apk / 部署 | 各端 `README.md` |
 
-路径不存在的会被剔除，并在 `missing` 里报出来（不静默跳过）。一条规则都没命中时兜底到该端的
-主文档（README 除外 —— 它只在安装/用法变化时才是对的目标）。
+`@tech` 由 `primaryDocRel()` / 分章集解析：有分章集 ⇒ 进入选章；没有 ⇒ 落到 `PROJECTS.techDocs` 的单篇。
+路径不存在的会在 `missing` 里报出来（不静默跳过）。一条规则都没命中时兜底到 `@tech`。
 
-### 章节建议
+### 选章、选节与插入计划
+
+分章集的 `pickDocTargets()` 与单篇走两条路：
+
+1. **改路径 → 章**（强信号）：把 `changes` 归一成项目相对路径，与每章 `frontmatter.files` 逐条匹配
+   （支持 `Views/Page.xaml(.cs)` 展开、`App.xaml.cs（ConfigureServices）` 去注释、目录前缀、basename 主干）；
+   命中分数最高的一章必选，最多再带 2 章有正向标题/小节相关的章。
+2. **标题/小节关键词**：`chapterTokenScore()` 只打章标题、`module`、小节标题；正文不参与选章，避免泛词把整本书拉进来。
+3. **选节**：`bestSection()` 只按小节标题打分；命中 ⇒ `edit.mode='existing'`（给节号与起始行）。
+   没命中 ⇒ 默认 `edit.mode='new'`：`nextSectionNumber()` 取本章最大 M + 1，`suggestAnchor()` 生成
+   不与现有锚点冲突的 id，插入行 = 文件末尾行数。
+4. **BUG 修复例外**：`kind='fix'` 且没命中既有小节时给 `edit.mode='chapter'`，明确要求
+   「在章内定位描述旧行为的段落改写，不新增以问题命名的小节」。这是防止正文变成提交日志的关键。
+5. **99 变更记录**：`set.changelogs` 里取最新一卷/单卷，作为独立 target 追加在末尾；
+   单卷给「引言后插入 `## YYYY-MM-DD · 标题`」，多卷给「最新卷末尾追加 `## <max+1> · 标题`」+
+   提示同步 `00-索引与编号映射.md`。`changelogStyle` / `changelogNext` / `changelogIndexRel` 随 target 返回。
+6. **frontmatter**：`missingFrontmatterFiles()` 比较本次源文件与该章 `files`，列出需要补的路径。
+
+单篇文档仍用 `pickSections()`：读 1~3 级标题，按最长命中词取前 3，并把「更新记录」纳入候选。
 
 `featureTokens()` 从「改动描述 + 变更文件」里抽特征词：整词 + 中文 2-gram + 文件名主干，
-并剔除 更新 / 同步 / 文档 这类泛词。`pickSections()` 只读**被选中的那几篇**（最多
-`docsyncMaxTargets` 篇）的 1~3 级标题，按最长命中词排序取前 3，并始终把「更新记录」纳入候选
-（API 完整文档、技术栈文档都有这一节）。
-
-抽 2-gram 是有意的：中文没有词边界，整句匹配永远命中不了标题；代价是偶尔出现
-「令牌登录 / 解绑令牌 / 重试失败」这类相关性一般的建议 —— 它是**给模型的提示**，
-不是必须照做的指令，所以宁滥勿缺。
+并剔除 更新 / 同步 / 文档 这类泛词。抽 2-gram 是有意的：中文没有词边界，整句匹配永远命中不了标题；
+代价是偶尔出现相关性一般的建议 —— 它是**给模型的提示**，不是必须照做的指令，所以宁滥勿缺。
 
 ## 发布链路（`kirara_release` / `kirara_release_notes`）
 
@@ -385,6 +482,7 @@ feat(应用内更新): 应用内 APK 下载/校验/安装，并修正互动预�
 | 新增或调整关键词路由 | `ROUTE_SIGNALS` / `UI_HINTS` / `INTERACTION_SIGNALS` / `DESTRUCTIVE_SIGNALS` |
 | 新增或调整「纯文档变更」判定 | `DOC_TARGET` / `DOC_ACTION` / `DOC_STRUCTURE` / `DOC_CODE_OBJECT` |
 | 新增或调整「该同步哪几篇文档」 | `DOC_RULES`（规则表）与 `CHORE_SIGNALS` / `FIX_SIGNALS` / `FEATURE_SIGNALS`（定性） |
+| 新增/调整分章文档的发现、编号、锚点、审计规则 | `findChapterDirs` / `parseDocFile` / `auditChapterSet`，并同步 `docs/doc-conventions.md` 与 `scripts/doc-layer-test.mjs` |
 | 换了视觉复核模型 | `VISION_PROVIDER` / `VISION_MODEL` |
 | 改了任何工具的 description / 参数 / 输出预算 | `node scripts/cache-budget.mjs`，并把 `BUDGET` 基线一起改 |
 

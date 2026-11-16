@@ -132,7 +132,8 @@ node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 4) 真宿主派�
 | `deploy.mjs` | **部署形态**：profile 副本 == 源码、profile 里无宿主包副本 | ✗ 只做文件/清单断言 |
 | `mount-check.mjs` | **解析归层**：复现 `routeScoped` 的两锚点判定 + 清单形态 | ✗ 模拟判定 |
 | `contract-test.mjs` | **真实调度链路**：真 `cordis.Context` + 真 `ToolRuntime`，逐个 `prepare()`。⚠️ **本机宿主上已整段失效** —— 它查的 `TOOL_RUNTIME_SCHEDULER` 从 0.2.2-rc.1 起不再导出，见 [事故六](troubleshooting.md) | ✓ 全真（但取执行器的方式过期） |
-| `host-dispatch.mjs` | **真宿主派发**（顶 `contract-test` 的位置）：真 `Context` + `ToolsService` + `@deepseek-ai/dsh-tool-executor-native`，把 10 个工具挨个派发，含 iOS 分支（`target=ios` 的 `macCommands`、media 的 iOS 验证清单、`profile` 的 `ios` 块） | ✓ 全真（**现行** API） |
+| `host-dispatch.mjs` | **真宿主派发**（顶 `contract-test` 的位置）：真 `Context` + `ToolsService` + `@deepseek-ai/dsh-tool-executor-native`，把 10 个工具挨个派发，含 iOS 分支（`target=ios` 的 `macCommands`、media 的 iOS 验证清单、`profile` 的 `ios` 块）与分章文档的 `map` / `section` / 章节插入计划分支 | ✓ 全真（**现行** API） |
+| `doc-layer-test.mjs` | **分章文档层**：临时工作区造「单卷 99」与「多卷 99」两种形态，断言发现规则、map/search/section、frontmatter.files 选章、既有/新增小节、BUG 修复不新开小节、历史编号 +1、00 索引提示、结构审计 | ✗ 假 `ctx.tools` |
 | `cache-budget.mjs` | **前缀缓存预算**：工具目录逐字节稳定 + 描述无易变内容 + 每个工具的返回值不超预算 | ✗ 假 `ctx.tools`（含一次假 `gradlew.bat` 真派发） |
 | `contract-test.mjs` 的 §6.5 | **可选键边界**：`artifact` / `screenshotReview` / `needScreenshots` 三类条件展开键，以及 `mode=docs` 的短路分支 | ✓ 全真 |
 | `contract-test.mjs` 的 §6.7 | **发布链路端到端**：临时仓库 + 假发布脚本，但真找产物、真改名、真搬目录、真算 SHA256、真写 `.sha256`；以及 README 门禁的拦下 / `force` 放行 / 提交后自动放行三段行为 | ✓ 全真 |
@@ -140,7 +141,8 @@ node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 4) 真宿主派�
 ```powershell
 node scripts\deploy.mjs          # 部署最新源码到 profile + 校验不变量
 node scripts\selftest.mjs        # 工具级自检
-node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 真宿主派发（含 iOS 分支）
+node scripts\doc-layer-test.mjs  # 分章文档层回归（发现 / map / search / section / 选章 / 插入计划 / 审计）
+node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 真宿主派发（含 iOS 与分章分支）
 node scripts\mount-check.mjs     # 挂载路径检查（内部会串 contract-test.mjs）
 node scripts\contract-test.mjs   # 真实契约测试（本机宿主上已失效，见事故六）
 node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 输出预算后必跑）
@@ -158,13 +160,13 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 
 | 常量 | 值 | 实测 | 说明 |
 | --- | --- | --- | --- |
-| `toolSchemaBytes` | 9500 | 9463（10 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565 的一次性常驻增量。2026-11 的 media 双端（`kirara_build` 的 `target`）再加 +402，**只剩 37 字节余量** —— 想再往 description 里加字，先确认值不值一次前缀抖动 |
-| `docsRenderChars` | 4400 | 3874 | 宽泛关键词 + `maxHits=40` |
+| `toolSchemaBytes` | 10400 | 10156（10 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565；media 双端 +402；2026-11 分章文档层 +903。还剩 244 字节余量 —— 想再往 description 里加字，先确认值不值一次前缀抖动 |
+| `docsRenderChars` | 4400 | 3869（search）/ 3817（section）/ 1645（map） | 宽泛关键词 + `maxHits=40`；section 的正文上限是 `docsBudgetChars − 300` |
 | `buildRenderChars` | 5600 | 5197 | 200 行 × 400 字符的假构建日志 |
 | `startRenderChars` | 1400 | 1302 | 长需求 + `auto`（含 UI + 文档同步两条额外步骤）。iOS 那条步骤只在命中 `IOS_SIGNALS` 时出现，本用例不计入 |
 | `verifyRenderChars` | 2000 | 1442 | `purpose=ui-design` + 截图，协议最长 |
 | `verifyIosRenderChars` | 2100 | 1979 | media 的 **iOS** 清单（模拟器自检 + DeviceHub 两步比 Android 多）；这条路径在 Windows 上也能被夹具走到（summary 里带 iOS 词即可），因为 `screenshotReview.instruction` 是要被原样执行的提示词，被截断即失效 |
-| `docsyncRenderChars` | 2500 | 1505 | 三端混合、4 篇目标 |
+| `docsyncRenderChars` | 2500 | 1827 | 三端混合、4 篇目标（含分章插入计划与写法规则） |
 | `narrativeHardCap` | 2400 | 2444（含截断说明） | `textBudgetChars` 默认值；原 1600，因为 UI 设计复核协议被截断即失效 |
 | `releaseNotesRenderChars` | 3600 | 2590 | `releaseNotesBudgetChars`（3200）+ 头部；取后端仓库这个最大区间 |
 | `releaseRenderChars` | 3400 | 251 | `releaseBudgetChars`（3000）+ 头部；`dryRun` 计划 |
@@ -236,7 +238,7 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
   宿主包目录: …\EduWork-ECNU\resources\product\d\node_modules
   ✓ 真实 cordis Context + ToolsService + native 执行器已就位
 
-=== 真宿主派发 11 次（含 iOS 分支）===
+=== 真宿主派发 14 次（含 iOS 与分章文档分支）===
   ✓ kirara_profile({"project":"media"}): 宿主接受返回值
   ✓ kirara_build({"project":"media","target":"ios-klib"}): 宿主接受返回值
       ❌ 构建失败 — media(ios-klib)  (0.1s, exit=9009)      ← 本机没 JDK；业务失败，契约仍成立
@@ -293,14 +295,15 @@ ok = true  exit = 0  duration = 2.3s
 | 想验证自更新链路本身 | `node scripts/update-e2e.mjs`（离线，18 项断言）、`node scripts/update-live-check.mjs`（联网打真 GitHub）、`node scripts/check-kernel-parity.mjs`（两仓库内核一致） |
 | 想验证插件管理页里的控件 | `node scripts/client-panel-test.mjs`（无浏览器；`--dump` 直接打印会渲染出的 HTML） |
 
-**改完在任何会话里都建议先跑一遍四条夹具**：`selftest` 抓业务逻辑、`cache-budget` 抓前缀缓存与输出预算、
-`host-dispatch` 抓「真宿主接受返回值」、`contract-test --from source` 抓调度链路契约
-（本机宿主上这份因 `TOOL_RUNTIME_SCHEDULER` 已废弃而整段失败 —— 见
-[troubleshooting 事故六](troubleshooting.md#事故六contract-test-在本机宿主上整段失败与插件改动无关)，
-用 `host-dispatch` 顶它的位置）。前三条都过再部署，能省掉一轮「重启 DSH 才发现又崩了」。
+**改完在任何会话里都建议先跑一遍五条夹具**：`selftest` 抓业务逻辑、`doc-layer-test` 抓分章文档的
+发现/选章/插入计划、`cache-budget` 抓前缀缓存与输出预算、`host-dispatch` 抓「真宿主接受返回值」、
+`contract-test --from source` 抓调度链路契约（本机宿主上这份因 `TOOL_RUNTIME_SCHEDULER` 已废弃而整段失败
+—— 见 [troubleshooting 事故六](troubleshooting.md#事故六contract-test-在本机宿主上整段失败与插件改动无关)，
+用 `host-dispatch` 顶它的位置）。前四条都过再部署，能省掉一轮「重启 DSH 才发现又崩了」。
 
 ```powershell
 node --no-warnings scripts/selftest.mjs
+node --no-warnings scripts/doc-layer-test.mjs
 node --no-warnings scripts/cache-budget.mjs
 node --no-warnings scripts/host-dispatch.mjs --host <宿主 node_modules 绝对路径>
 node scripts/deploy.mjs          # 部署

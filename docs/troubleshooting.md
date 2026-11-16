@@ -224,6 +224,9 @@ Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(<工作区根>)
 | 明明是改文档，却被判成 `full`/`small` 要构建 | `mode=docs` 的判定词表刻意保守（缺「章节/段落」这类结构词） | 显式传 `mode: 'docs'` |
 | `kirara_verify` 反复要求先给截图 | **不是故障**：UI 改动必经截图（`needScreenshots`），不看图就改样式等于盲改 | 截图后带 `purpose: 'ui-design'` 再调一次 |
 | `kirara_docsync` 推荐的文档打不开 | 规则命中了不存在的路径（`PROJECTS.docs` 里的死链） | 看返回里的 `missing` 字段，修 `PROJECTS[].docs` |
+| `kirara_docs({ mode: 'map' })` 只列单篇、不显示章节 | 该目录不满足分章集判定：需要 **≥2 个 `NN-标题.md`（01–89）**；`99-变更记录/` 是流水卷，不算模块章 | 补模块章，或确认 `techDocs` / `docs` 指到了分章集目录；规则见[写作规范](doc-conventions.md) |
+| `kirara_docs({ mode: 'section' })` 找不到小节 | 传了自动锚点（如 `#03.2`），或该 H2 前没有显式 `<a id>` | 先 `mode=map, chapter='03'` 看节号与锚点；给目标 H2 前补 `<a id="slug"></a>` |
+| `mode=map` 末尾的审计一直报断链 | 文档集不完整（例如 `Kirara_Server_Studio` 当前缺 `12-应用与下载管理.md` / `13-构建发布与安装.md`） | 补齐缺失章，或把引用改成现有章/锚点；审计只报事实，不会自动改文档 |
 | 工具 schema 字节数超了 `cache-budget` 基线 | 新增工具或把 description 写胖了 | 跑 `node scripts\cache-budget.mjs`，确认增量值得后再改 `BUDGET` |
 | `kirara_release` 发布 api 报「Docker 守护进程不可用」 | Docker Desktop 没在运行（探针读的是 `npipe:////./pipe/dockerDesktopLinuxEngine`） | 启动 Docker Desktop 等它就绪再跑。这是**发布前**的拦截，不是跑到一半失败 |
 | `kirara_release` 发布 media 报「keystore.properties 不存在」 | 签名配置缺失，gradle 跑到 release 变体才会报错 | 补上 `Kirara_Media/keystore.properties`（`storeFile` / `storePassword` / `keyAlias` / `keyPassword`） |
