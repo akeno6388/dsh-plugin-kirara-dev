@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 写发版印章：把「最后一次改到 lib/impl.js 的提交」的 sha 写进 lib/build-info.js。
+ * 写发版印章：把「最后一次改到 lib/ 的提交」的 sha 写进 lib/build-info.js。
  * ---------------------------------------------------------------------------
  * 为什么需要它：插件自更新时要判断「我这份实现对应哪个提交」。印章缺失（null）也能跑，
  * 只是界面会把随包安装的那份显示成「未知提交」。
@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_DIR = path.resolve(HERE, '..');
 const TARGET = path.join(REPO_DIR, 'lib', 'build-info.js');
-const IMPL_PATH = 'lib/impl.js';
+const IMPL_PATH = 'lib';
 
 function git(args) {
   return execFileSync('git', ['-C', REPO_DIR, ...args], { encoding: 'utf8' }).trim();

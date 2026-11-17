@@ -100,7 +100,7 @@ async function main() {
   fs.symlinkSync(hostModules, path.join(pkgDir, 'node_modules'), 'junction');
 
   // 假的「已安装包」：真的引导层 + 真的内核 + 假的实现（v1）。
-  for (const file of ['index.js', 'update.js', 'build-info.js']) {
+  for (const file of ['index.js', 'update.js', 'build-info.js', 'manifest.js']) {
     fs.copyFileSync(path.join(REPO_DIR, 'lib', file), path.join(pkgDir, 'lib', file));
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(REPO_DIR, 'package.json'), 'utf8'));
@@ -127,6 +127,7 @@ async function main() {
     'lib/index.js': fs.readFileSync(path.join(pkgDir, 'lib', 'index.js'), 'utf8'),
     'lib/update.js': fs.readFileSync(path.join(pkgDir, 'lib', 'update.js'), 'utf8'),
     'lib/build-info.js': fs.readFileSync(path.join(pkgDir, 'lib', 'build-info.js'), 'utf8'),
+    'lib/manifest.js': fs.readFileSync(path.join(pkgDir, 'lib', 'manifest.js'), 'utf8'),
   });
 
   const server = http.createServer((req, res) => {
