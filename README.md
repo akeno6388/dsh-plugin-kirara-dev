@@ -723,6 +723,14 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 再想往工具目录里加东西，仍要先在同一轮里删掉等量的描述字数，而不是抬 `toolSchemaBytes` 基线
 （抬基线等于用常驻前缀换一次性的方便）。
 
+0.4.2 是**纯数据修正**，不动 schema（仍 11740）：`PROJECTS.api` 那两条文档登记
+（`docs/Kirara Server API 完整文档.md` / `docs/服务端后端系统技术栈.md`）随 2026-11 的分章重构消失，
+0.4.1 新加的死链自检上线当天就把它们打了出来 —— 改成 `docs/技术栈文档` 目录形态（与 desktop 同款，
+章节由文档层自动发现）。`kirara_profile` 的三端全量渲染随之从 1194 降到 **1115** 字符。
+api 的**发版版本源**（`release.versionFrom`）指向的是同一篇已消失的文档，因此取不到版本、
+`kirara_release --project api` 仍以「无法确定发布版本号」阻断：新分章集里没有 `kirara-api:X.Y.Z`
+字面量，版本真相该落在哪一篇属于单独一批的决策，这里不猜。
+
 ## 兼容性
 
 `peerDependencies` 声明为 `@deepseek-ai/dsh-tools@^0.2.0-rc.2`，覆盖 DSH 0.2.x 全系列

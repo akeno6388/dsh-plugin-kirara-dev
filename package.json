@@ -1,8 +1,8 @@
-{
+﻿{
   "name": "@kirara/dsh-plugin-kirara-dev",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
-  "description": "Kirara 多端项目开发流程编排插件：解读文档 → 提问定路线 → 开发 → 构建验证 → 实机验证清单（UI 走实时视觉环：MCP 截图/点按 + 迭代闭环，再截图复核）→ 文档同步 → 打包发布（版本号 / _v 命名 / SHA256 + README 门禁）→ 总结",
+  "description": "Kirara 澶氱椤圭洰寮€鍙戞祦绋嬬紪鎺掓彃浠讹細瑙ｈ鏂囨。 鈫?鎻愰棶瀹氳矾绾?鈫?寮€鍙?鈫?鏋勫缓楠岃瘉 鈫?瀹炴満楠岃瘉娓呭崟锛圲I 璧板疄鏃惰瑙夌幆锛歁CP 鎴浘/鐐规寜 + 杩唬闂幆锛屽啀鎴浘澶嶆牳锛夆啋 鏂囨。鍚屾 鈫?鎵撳寘鍙戝竷锛堢増鏈彿 / _v 鍛藉悕 / SHA256 + README 闂ㄧ锛夆啋 鎬荤粨",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
