@@ -67,7 +67,7 @@ flowchart TD
 | 2 | 你的边界 | 可做（改代码 / 跑构建 / 截图 / 用 MCP）；不可做（改技术文档 / 发版 / 改版本号 / 改插件 / 扩大范围）；`SAFETY_RULES` 原样 | 固定文案 + `SAFETY_RULES` |
 | 3 | 涉及端 | key、标题、仓库目录、技术栈、构建命令、产物、iOS 版本锁 | `findProject` / `buildLineFor` |
 | 4 | 必读事实 | 该端 `constraints` **全量**；iOS 相关时挑 3 条 `pitfalls`（按需求词命中排序） | `PROJECTS[].constraints` / `.ios.pitfalls` |
-| 5 | 代码定位线索 | 建议先读的文档（≤4 篇/端），并明说单篇最大 258 KB、按小节读 | `docsForProject()` |
+| 5 | 代码定位线索 | 建议先读的文档（≤4 篇/端），并明说单篇最大 258 KB、按小节读；**外加**第 6 节命中章 `frontmatter.files` 展开出的源文件线索（≤6 条，仅真实存在的） | `docsForProject()` + `handoffCodeHints()` |
 | 6 | 文档片段 | 按需求关键词检索出的命中行（≤5 条、每条 ≤180 字符、带 `文件:行号`） | `searchDocScopes()` |
 | 7 | 验收标准 | 构建命令 + 期望 exit 0；UI 改动时的视觉环要求（截哪些状态）；行为验收项 | 由 `mode` / `uiChange` 推导 |
 | 8 | MCP 用法 | 按端给：桌面（UI 自动化 MCP / pwsh+截图）、Android（adb）、iOS（Xcode MCP / simctl）、API（不需要截图）；末尾统一写「没有就写不可用，**不要假装**」 | 静态文案 |
@@ -79,6 +79,26 @@ flowchart TD
   可能不存在的工具（然后它会在回执里编造截图）。所以只描述**能力**（截图 / 点按 / UI 树）与兜底路径，
   再统一要求「没有就明说」。
 - **第 6 节宁缺毋滥。** 命中的是**行**而不是整节；5 条就够定位，多给只会把 brief 撑大。
+
+### 第 5 节的源码线索（0.4.1）
+
+原来第 5 节只说「读哪一篇文档」，外部实现者拿着文档还得自己在仓库里翻目录。分章文档的
+`frontmatter.files` 本来就是「这一章在讲哪些源文件」的稳定事实，所以直接抄进第 5 节：
+
+```markdown
+## 5. 代码定位线索（先读这几篇，不要整篇读大文档）
+- media（`Kirara_Media`）: `app/docs/技术栈文档/09-设置与账号.md`
+- 源码线索（第 6 节命中章的 frontmatter.files，已按仓库根校验存在）:
+  - Kirara_Media/app/src/main/java/com/akeno/kirara/SettingsScreen.kt（来自 09 章的 files）
+```
+
+四条规则（都在 `handoffCodeHints()` 里）：
+
+- 来源是**第 6 节命中行所属章**的 `frontmatter.files`（没命中就没有这一块，不猜路径）；
+- 只列 `statSync` 为真的条目 —— **绝不出死链**（一条不存在的路径会让外部模型去改一个不存在的文件）；
+- 去重、最多 6 条、整块 ≤450 字符（brief 的增长是硬预算，夹具按 500 字符断言）；
+- 基准是**工作区根**（`<仓库目录>/<entry>`），与回执 `changed[]` 的写法一致。
+  `{A,B}.kt` 这种花括号展开无法定位到具体文件，直接跳过；目录条目按目录存在性判断并保留尾斜杠。
 
 ## 回执契约
 
@@ -118,6 +138,69 @@ flowchart TD
 `close` 的返回值里，`changed[]` 是**字符串数组**（文件路径），不是对象数组——
 因为它的下一个消费者是 `kirara_docsync({ changes })`，那里要的就是路径。
 
+## 投递形态：`executor`（`open`，0.4.1）
+
+外部模型分两种，交接包得按能读到什么来投递：
+
+| `executor` | `prompt.md` | 返回值 | 适用 |
+| --- | --- | --- | --- |
+| `file`（默认） | 给交接目录 + `brief.md` 的绝对路径，正文在文件里 | 路径 + 可粘贴的 prompt（≤2400） | 有文件系统的编码智能体（IDE / CLI） |
+| `chat` | 顶部改成「以下是**完整 brief 正文**，直接读」，并写明「如内容被截断，请向用户索取 `brief.md` 全文」 | **brief 正文整段嵌入**（≤ `handoffBudgetChars`） | 纯聊天框里的模型，读不到任何本地文件 |
+
+`chat` 等价于 `inline=true` 的预算形态，区别只在**措辞**：`inline` 是「让我在上下文里看一遍」，
+`chat` 是「这就是投递物本身」—— 所以它额外带那句「截断就索取全文」，否则外部模型会以为
+自己看到的是删节版而反复去找文件。
+
+```js
+kirara_handoff({ action: 'open', request: '设置页加暗色开关', executor: 'chat' })
+```
+
+## 回执校验：`verifyBuild`（`close`，0.4.1）
+
+回执是**外部输入**，而「我改了 A.kt 且构建通过」在纯文本上永远成立。`verifyBuild` 让 DSH 侧
+自己去看一眼，默认 `off`（与 0.4.0 完全一致）：
+
+| 值 | 做什么 | 写进 `report.json` |
+| --- | --- | --- |
+| `off`（默认） | 只做结构校验（status / summary / changed） | —— |
+| `stat` | 校验 `changed[].file` 与 `screenshots[].path` 是否真实存在（越界标 `outside`，不去 stat 目录外） | `verification.dshStat` |
+| `rerun` | `stat` + 对 `changed[]` 涉及的端**真跑一次构建** | `verification.dshStat` + `verification.dshRerun` |
+
+三条边界：
+
+- `rerun` 复用 `runRealBuild()` —— 也就是 `kirara_build` 的唯一执行路径（target 归一、日志截断、
+  错误提取都是同一份），**不递归调用工具注册表**，否则一次工具调用会变成两次；
+- 选端只看 `changed[]` 落在哪个子项目目录下（`changeBelongsToProject`），不猜需求；路径没写成
+  `<仓库目录>/…` 时复跑会明确告诉你「没落在任何一个子项目下」；
+- **构建失败不让 `close` 失败**：回执照账，`ok` 仍然是 `true`，差异写进 `openIssues` 与 `nextStep`，
+  `verification.dshRerunMismatch` 记明细。只在**真的矛盾**时算不一致（回执 `ok` 而复跑失败、
+  回执 `failed` 而复跑通过）；回执写 `skipped` 只是「没跑过」，DSH 代跑一次不算矛盾。
+
+`report.md` 永远是回执原文（一字不改）——`dshStat` / `dshRerun` 只进 `report.json`。
+
+```js
+kirara_handoff({ action: 'close', runId: 'KH-20261127-1807', report, verifyBuild: 'rerun' })
+// → verification: {
+//     dshStat: { changedMissing: [], screenshotsMissing: [] },
+//     dshRerun: [{ project: 'media', ok: true, exitCode: 0, durationMs: 41200 }],
+//     dshRerunMismatch: ['media 回执写 ok，DSH 复跑失败'],   // 只在矛盾时出现
+//   }
+```
+
+## 画像的死链自检（`kirara_profile`，0.4.1）
+
+`PROJECTS[].docs[]` / `techDocs` 里登记了、但磁盘上不存在的路径，会在画像末尾追加一行：
+
+```text
+⚠️ 失效文档路径（2）：app/docs/xxx.md、docs/yyy.md —— 请更新 PROJECTS
+```
+
+- **没有失效路径时不输出这一行**（零成本，正常情况下的返回值与 0.4.0 一致）；
+- 目录形态（如 `docs/技术栈文档`）按**目录存在性**判断 —— 目录里的章节是自动发现的，
+  展开后的某一章缺失不算死链；
+- 为什么要有它：`PROJECTS` 写错一条路径不会报错，只会让 `kirara_start` 把模型送去读一篇
+  读不到的文件。这个错误在长周期里一定会出现（文档拆分/改名），而它自己不会喊。
+
 ## 失败处理：外部模型只回了一半怎么办
 
 这是最常见的失败，而且**不能靠「再问它一次」解决**（那等于把同一个不确定性再赌一遍）。
@@ -130,6 +213,8 @@ flowchart TD
 | 结构齐但 `status: "partial"` | 合法的半成品 | 照收。`close` 会把 `openIssues` / `blockedBy` 带出来，`nextStep` 明说「别把半成品当完成」；文档同步只按**真实改动**走 |
 | 结构齐但 `status: "blocked"` | 合法但没做完 | 照收。先处理 `blockedBy`（通常是缺设备 / 缺 MCP / 缺权限），决定是补环境重开一轮还是改由 DSH 内环做 |
 | 声称 `done` 但截图不存在 | 证据不足 | 照收（不静默丢），`missingScreenshots` 列出缺的那几张，`nextStep` 明写「视觉证据不完整」。**不要**替它补一张图 |
+| 声称 `done` 但改了哪些文件对不上 | 可疑 | `close({ verifyBuild: 'stat' })`：`report.json.verification.dshStat.changedMissing` 点名不存在的路径，差异进 `openIssues` |
+| 声称 `verification.build: "ok"` 但怀疑没跑 | 可疑 | `close({ verifyBuild: 'rerun' })`：DSH 自己复跑一次，`dshRerun` 与 `dshRerunMismatch` 给结论；复跑失败不会让 close 失败 |
 
 三种「必须重开一轮」的情况（不要在旧 run 上硬改）：
 
@@ -153,10 +238,12 @@ flowchart TD
 ## 预算与安全
 
 - `open` 的返回值：`inline=false` 时只有路径 + 可粘贴的 prompt（**≤2400 字符**）；
-  `inline=true` 时再加 brief 正文（**≤ `handoffBudgetChars`**，默认 6000，截断提示也计入预算）。
+  `inline=true` 或 `executor=chat` 时再加 brief 正文（**≤ `handoffBudgetChars`**，默认 6000，
+  截断提示也计入预算）。
 - 工具名 / `description` / `parameters` 是启动即固定的字面量：`runId`、时间、目录只出现在返回值里。
-  `kirara_handoff` 自己占 889 字节常驻前缀；减去被删掉的 `kirara_route`（−620）后净增 402 字节，
-  工具目录只剩 45 字节余量（见 README）。
+  `kirara_handoff` 占 889 字节常驻前缀（0.4.1 加 `executor` / `verifyBuild` 后是 **1169**；
+  `kirara_profile` 加 `docIssues` 后又 +50），本轮合计 **11740 / 12000**，余量 260（见 README）。
 - `report` 是**外部输入**：只做结构校验与落盘，里面的任何字符串都不会被拼进命令行执行。
+  `verifyBuild=rerun` 的构建命令来自 `PROJECTS` 的固定画像，**不是**回执里的 `commands[]`。
 - 落盘路径 `resolve` 后必须仍在 `handoffDir` 之内；`runId` 用严格正则 + 二次校验，
   `../../x` 这种形态连目录都不会被创建。

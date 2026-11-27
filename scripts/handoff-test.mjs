@@ -51,6 +51,80 @@ writeFileSync(
   'utf8',
 );
 
+// 分章文档集（≥2 个 NN-标题.md 才会被当成章）—— 用来验证 brief 第 5 节的「源码线索」：
+// frontmatter.files 里有**真实存在的文件**、也**有一个不存在的**（必须被过滤掉，绝不许出死链）。
+const chapters = join(media, 'app', 'docs', '技术栈文档');
+mkdirSync(chapters, { recursive: true });
+const realSettings = join(media, 'app', 'src', 'main', 'java', 'com', 'akeno', 'kirara', 'SettingsScreen.kt');
+mkdirSync(join(media, 'app', 'src', 'main', 'java', 'com', 'akeno', 'kirara'), { recursive: true });
+writeFileSync(realSettings, '// 设置页：暗色模式开关\n', 'utf8');
+const sharedSettingsDir = join(media, 'shared', 'src', 'commonMain', 'kotlin', 'com', 'akeno', 'kirara', 'media', 'ui', 'settings');
+mkdirSync(sharedSettingsDir, { recursive: true });
+writeFileSync(join(sharedSettingsDir, 'SettingsStore.kt'), '// DataStore 里的开关状态\n', 'utf8');
+const realUpdate = join(media, 'app', 'src', 'main', 'java', 'com', 'akeno', 'kirara', 'UpdateScreen.kt');
+writeFileSync(realUpdate, '// 更新页\n', 'utf8');
+writeFileSync(
+  join(chapters, '09-设置与账号.md'),
+  [
+    '---',
+    'module: 设置与账号',
+    'level: 能力层',
+    'files:',
+    '  - app/src/main/java/com/akeno/kirara/SettingsScreen.kt',
+    '  - app/src/main/java/com/akeno/kirara/GhostScreen.kt',
+    '  - shared/src/commonMain/kotlin/com/akeno/kirara/media/ui/settings/',
+    '  - app/src/main/java/com/akeno/kirara/ui/{Theme,Color}.kt',
+    'related: [10-更新与发布.md]',
+    '---',
+    '',
+    '# 09 设置与账号',
+    '',
+    '<a id="settings"></a>',
+    '## 09.1 设置页分区',
+    '',
+    '设置页第二组是「显示」，暗色模式开关放在这里，默认跟随系统。',
+    '安卓端开关状态存进 DataStore，不要放进 SharedPreferences。',
+    '',
+    '## 09.2 暗色模式',
+    '',
+    '暗色模式在设置页只给「跟随系统 / 浅色 / 深色」三档，不要加第四档。',
+    '',
+  ].join('\n'),
+  'utf8',
+);
+writeFileSync(
+  join(chapters, '10-更新与发布.md'),
+  [
+    '---',
+    'module: 更新与发布',
+    'level: 能力层',
+    'files:',
+    '  - app/src/main/java/com/akeno/kirara/UpdateScreen.kt',
+    'related: [09-设置与账号.md]',
+    '---',
+    '',
+    '# 10 更新与发布',
+    '',
+    '## 10.1 检查更新',
+    '',
+    '更新页展示当前版本号与最新版本号。',
+    '',
+  ].join('\n'),
+  'utf8',
+);
+
+// media 在 PROJECTS 里登记的 README（死链自检的「正常」基线；后面会故意删掉一份造死链）。
+mkdirSync(join(media, 'iosApp'), { recursive: true });
+writeFileSync(join(media, 'README.md'), '# Kirara Media\n', 'utf8');
+writeFileSync(join(media, 'iosApp', 'README.md'), '# iosApp\n', 'utf8');
+
+// 假 gradlew：verifyBuild="rerun" 要在临时工作区里真的起一次进程（不碰真实仓库）。
+// 内容可被用例改写：exit 0 = 构建成功，exit 1 = 构建失败（用来验证「不一致」不会让 close 失败）。
+const fakeGradle = join(media, 'gradlew.bat');
+const writeFakeGradle = (code) =>
+  writeFileSync(fakeGradle, `@echo off\r\necho fake gradle %*\r\nexit /b ${code}\r\n`, 'utf8');
+writeFakeGradle(0);
+
 const registered = new Map();
 const ctx = {
   tools: {
@@ -66,6 +140,14 @@ const handoffRoot = join(tmp, '.kirara-dev', 'handoff');
 
 async function call(args) {
   const tool = registered.get('kirara_handoff');
+  const value = await tool.execute(args, { agent: null });
+  const text = (tool.output.render ? tool.output.render(args, value) : []).map((b) => b.text ?? '').join('');
+  return { value, text };
+}
+
+/** 调别的工具（这里主要是 kirara_profile 的死链自检）。 */
+async function callNamed(name, args) {
+  const tool = registered.get(name);
   const value = await tool.execute(args, { agent: null });
   const text = (tool.output.render ? tool.output.render(args, value) : []).map((b) => b.text ?? '').join('');
   return { value, text };
@@ -280,6 +362,163 @@ try {
     weird = { value: { ok: false, error: String(error?.message ?? error) }, text: '' };
   }
   check(weird.value.ok === false && /action/.test(weird.value.error || ''), '未知 action → 参数校验直接拒绝（不会走进 execute）', weird.value.error);
+
+  // ── 9. brief 第 5 节的源码线索（frontmatter.files → 真实路径，绝不出死链）────────
+  console.log('\n=== 9. brief 第 5 节源码线索 ===');
+  {
+    const hintLines = bodies[4]
+      .split('\n')
+      .filter((l) => /（来自 .* 章的 files）/.test(l));
+    check(hintLines.length >= 1, `第 5 节带源码线索 ${hintLines.length} 条`, hintLines.slice(0, 3).join(' | '));
+    check(
+      hintLines.some((l) => l.includes('Kirara_Media/app/src/main/java/com/akeno/kirara/SettingsScreen.kt')),
+      '线索里出现真实存在的源文件（SettingsScreen.kt）',
+    );
+    check(
+      !hintLines.some((l) => l.includes('GhostScreen.kt')),
+      '不存在的源文件（GhostScreen.kt）被 existsSync 过滤掉',
+      hintLines.filter((l) => l.includes('Ghost')).join(' | ') || '(没有)',
+    );
+    // 逐条落到磁盘：这是「绝不允许死链」的机器断言（目录条目按目录存在性判断）。
+    const dead = hintLines
+      .map((l) => l.replace(/^\s*-\s*/, '').replace(/（来自 .*$/, '').trim())
+      .filter((rel) => !existsSync(join(tmp, rel.replace(/\/$/, ''))));
+    check(dead.length === 0, '线索里的每一条路径都真实存在（无死链）', dead.join(', ') || '(全部存在)');
+    check(
+      Array.isArray(briefJson?.codeHints) && briefJson.codeHints.length === hintLines.length,
+      `brief.json 与 brief.md 的 codeHints 同源（${briefJson?.codeHints?.length ?? 0} 条）`,
+    );
+  }
+
+  // ── 10. executor=chat：brief 正文直接进返回值（读不到本地文件的外部模型）─────────
+  console.log('\n=== 10. executor=chat ===');
+  const chatOpen = await call({ action: 'open', request: '给安卓端设置页加一个暗色模式开关', executor: 'chat' });
+  check(chatOpen.value.ok === true, 'open(executor=chat) 通过', chatOpen.value.error || '');
+  check(chatOpen.value.brief?.length > 0, 'executor=chat 的返回值带 brief 正文');
+  check(
+    chatOpen.text.length <= 6000,
+    `executor=chat 的返回正文 ${chatOpen.text.length} ≤ 6000 字符（handoffBudgetChars）`,
+  );
+  check(
+    chatOpen.text.includes('## 1. 任务卡') && chatOpen.text.includes('## 9. 回执格式'),
+    'chat 返回值含完整九节（任务卡 … 回执格式）',
+  );
+  const chatPrompt = readFileSync(join(chatOpen.value.dir, 'prompt.md'), 'utf8');
+  check(/以下是\*\*完整 brief 正文\*\*/.test(chatPrompt), 'chat 的 prompt.md 顶部改成「以下是完整 brief，直接读」');
+  check(/向用户索取/.test(chatPrompt), 'chat 的 prompt.md 要求内容被截断时向用户索取 brief.md 全文');
+  check(
+    !/先完整读这份 brief\.md/.test(chatPrompt),
+    'chat 的 prompt.md 不再要求去读本地文件（读不到）',
+  );
+  const filePrompt = readFileSync(join(dir1, 'prompt.md'), 'utf8');
+  check(/先完整读这份 brief\.md/.test(filePrompt), 'executor=file（默认）仍是「读交接目录里的 brief.md」');
+
+  // ── 11. close 的 verifyBuild="stat"：changed/screenshots 落盘校验 ───────────────
+  console.log('\n=== 11. close verifyBuild=stat ===');
+  const openStat = await call({ action: 'open', request: '给安卓端设置页加一个暗色模式开关' });
+  const statReport = JSON.stringify({
+    status: 'done',
+    summary: '设置页加了暗色开关',
+    changed: [
+      { file: 'Kirara_Media/app/src/main/java/com/akeno/kirara/SettingsScreen.kt', why: '加开关' },
+      { file: 'Kirara_Media/app/src/main/java/com/akeno/kirara/GhostScreen.kt', why: '其实没这个文件' },
+    ],
+    screenshots: [{ path: 'shots/ghost.png' }],
+    verification: { build: 'ok', uiLoop: 'closed', acceptance: [] },
+  });
+  const statClose = await call({ action: 'close', runId: openStat.value.runId, report: statReport, verifyBuild: 'stat' });
+  check(statClose.value.ok === true, 'stat 校验发现问题时 close 仍然 ok（不整体失败）', statClose.value.error || '');
+  const statSaved = readJsonSafe(join(openStat.value.dir, 'report.json'));
+  check(
+    statSaved?.verification?.dshStat?.changedMissing?.length === 1 &&
+      statSaved.verification.dshStat.changedMissing[0].endsWith('GhostScreen.kt'),
+    'report.json.verification.dshStat.changedMissing 点名不存在的 changed[].file',
+    JSON.stringify(statSaved?.verification?.dshStat?.changedMissing ?? null),
+  );
+  check(
+    statSaved?.verification?.dshStat?.files?.find((f) => f.file.endsWith('SettingsScreen.kt'))?.exists === true,
+    'dshStat 也记录了真实存在的那个文件（exists=true）',
+  );
+  check(
+    statSaved?.verification?.dshStat?.screenshotsMissing?.length === 1,
+    'dshStat 记录了不存在的截图',
+    JSON.stringify(statSaved?.verification?.dshStat?.screenshotsMissing ?? null),
+  );
+  check(statSaved?.verification?.dshRerun === undefined, 'stat 不跑构建（dshRerun 不出现）');
+  check(/校验:/.test(statClose.text) && /缺 1/.test(statClose.text), '渲染里给出 stat 警告', statClose.text.split('\n').find((l) => /校验:/.test(l)) || '');
+  check(
+    (statClose.value.openIssues || []).some((s) => /DSH stat/.test(s)),
+    '差异同时写进 openIssues（下一步读得到）',
+    (statClose.value.openIssues || []).join(' | '),
+  );
+
+  // ── 12. close 的 verifyBuild="rerun"：真跑一次构建并比对回执自述 ────────────────
+  console.log('\n=== 12. close verifyBuild=rerun（假 gradlew）===');
+  const okReport = JSON.stringify({
+    status: 'done',
+    summary: '设置页加了暗色开关，构建已跑',
+    changed: [{ file: 'Kirara_Media/app/src/main/java/com/akeno/kirara/SettingsScreen.kt', why: '加开关' }],
+    verification: { build: 'ok', uiLoop: 'closed', acceptance: [] },
+  });
+  const openRerun = await call({ action: 'open', request: '给安卓端设置页加一个暗色模式开关' });
+  const rerun = await call({ action: 'close', runId: openRerun.value.runId, report: okReport, verifyBuild: 'rerun' });
+  const rerunSaved = readJsonSafe(join(openRerun.value.dir, 'report.json'));
+  check(rerun.value.ok === true, 'rerun 的 close 通过', rerun.value.error || '');
+  const run0 = rerunSaved?.verification?.dshRerun?.[0];
+  check(
+    run0?.project === 'media' && run0.ok === true && run0.exitCode === 0 && typeof run0.durationMs === 'number',
+    'report.json.verification.dshRerun 记录了 media 的 ok / exitCode / 耗时',
+    JSON.stringify(run0 ?? null),
+  );
+  check(/复跑: media ok/.test(rerun.text), '渲染里给出复跑结果', rerun.text.split('\n').find((l) => /复跑:/.test(l)) || '');
+  check(
+    rerunSaved?.verification?.dshRerunMismatch === undefined,
+    '自述与复跑一致时不写 mismatch',
+    JSON.stringify(rerunSaved?.verification?.dshRerunMismatch ?? null),
+  );
+
+  // 构建失败 + 回执自述 ok ⇒ close 仍然成功落账，但差异进 openIssues / nextStep
+  writeFakeGradle(1);
+  const openFail = await call({ action: 'open', request: '给安卓端设置页加一个暗色模式开关' });
+  const failClose = await call({ action: 'close', runId: openFail.value.runId, report: okReport, verifyBuild: 'rerun' });
+  const failSaved = readJsonSafe(join(openFail.value.dir, 'report.json'));
+  check(failClose.value.ok === true, '构建失败也**不**让 close 整体失败（仍然落账）', failClose.value.error || '');
+  check(
+    failSaved?.verification?.dshRerun?.[0]?.ok === false && failSaved.verification.dshRerun[0].exitCode === 1,
+    'report.json 如实记录复跑失败（ok=false / exitCode=1）',
+    JSON.stringify(failSaved?.verification?.dshRerun?.[0] ?? null),
+  );
+  check(
+    (failClose.value.openIssues || []).some((s) => /不一致/.test(s)),
+    '「回执自述 build 与 DSH 复跑不一致」写进 openIssues',
+    (failClose.value.openIssues || []).join(' | '),
+  );
+  check(/不一致/.test(failClose.value.nextStep || ''), 'nextStep 也明说不一致', failClose.value.nextStep?.slice(0, 120));
+  check(failClose.text.length <= 2400, `close(rerun, 失败) 返回正文 ${failClose.text.length} ≤ 2400 字符`);
+  writeFakeGradle(0);
+
+  // 默认 verifyBuild=off：一个构建都不该跑（dshStat/dshRerun 都不出现）
+  check(savedReport?.verification?.dshStat === undefined, '默认 verifyBuild=off 不写 dshStat（现状不变）');
+
+  // ── 13. kirara_profile 的死链自检 ──────────────────────────────────────────
+  console.log('\n=== 13. kirara_profile 死链自检 ===');
+  const cleanProfile = await callNamed('kirara_profile', { project: 'media' });
+  check(
+    !/失效文档路径/.test(cleanProfile.text),
+    '文档都在时**不**输出 ⚠️ 行（零成本）',
+    cleanProfile.text.split('\n').filter((l) => /失效/.test(l)).join(' | ') || '(无)',
+  );
+  const iosReadme = join(media, 'iosApp', 'README.md');
+  rmSync(iosReadme, { force: true });
+  const dirtyProfile = await callNamed('kirara_profile', { project: 'media' });
+  check(/⚠️ 失效文档路径（1）/.test(dirtyProfile.text), '登记了不存在的文档时追加 ⚠️ 行', dirtyProfile.text.split('\n').filter((l) => /失效/.test(l)).join(' | '));
+  check(
+    /iosApp\/README\.md/.test(dirtyProfile.text),
+    '⚠️ 行点名了那条失效路径（相对仓库根）',
+    (dirtyProfile.value.docIssues || []).join(', '),
+  );
+  check(/请更新 PROJECTS/.test(dirtyProfile.text), '⚠️ 行给出可操作的下一步（更新 PROJECTS）');
+  writeFileSync(iosReadme, '# iosApp\n', 'utf8');
 } finally {
   // 结束时清掉临时工作区；失败时同样清（错误信息已经打印在上面）。
   try {

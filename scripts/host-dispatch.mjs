@@ -146,6 +146,38 @@ const cases = [
       }),
     },
   ],
+  // 0.4.1 的两条新分支（close 不带 runId ⇒ 都落在**最新**这次 open 上，所以排在上面那条 close 之后）：
+  // executor=chat 的返回值带整段 brief 正文；verifyBuild 把 dshStat / dshRerun 嵌进 verification
+  // （嵌套对象 + 数组，最容易被 output.schema 拦）。rerun 只在 changed[] 命中真实子项目时才起进程，
+  // 这里指向 api 端：真跑一次 dotnet build（几秒），顺带验证 ok / exitCode / durationMs 三个键的形状。
+  ['kirara_handoff', { action: 'open', request: '给安卓端设置页加一个暗色模式开关', executor: 'chat' }],
+  [
+    'kirara_handoff',
+    {
+      action: 'close',
+      verifyBuild: 'stat',
+      report: JSON.stringify({
+        status: 'done',
+        summary: '宿主派发回归：stat 校验',
+        changed: [{ file: 'Kirara_Media/app/src/main/java/com/akeno/kirara/GhostScreen.kt', why: '故意不存在' }],
+        screenshots: [{ path: 'shots/ghost.png' }],
+        verification: { build: 'ok', uiLoop: 'closed', acceptance: [] },
+      }),
+    },
+  ],
+  [
+    'kirara_handoff',
+    {
+      action: 'close',
+      verifyBuild: 'rerun',
+      report: JSON.stringify({
+        status: 'done',
+        summary: '宿主派发回归：rerun 校验',
+        changed: [{ file: 'Kirara_Server-API/Program.not-there.cs', why: '故意不存在，但落在 api 仓库下' }],
+        verification: { build: 'ok', uiLoop: 'n/a', acceptance: [] },
+      }),
+    },
+  ],
   ['kirara_docs', { keywords: ['DeviceHub'], project: 'media', maxHits: 4 }],
   // 分章文档层：map / section / 章节+插入计划三种返回分支（可选键不同）。
   ['kirara_docs', { mode: 'map', project: 'desktop' }],

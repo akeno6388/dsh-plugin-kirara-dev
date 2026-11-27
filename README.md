@@ -30,9 +30,9 @@
 | 工具 | 说明 |
 | --- | --- |
 | `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题。`mode=auto` 会在 `docs` / `full` / `small` 之间判定；`detail=route` 只出路线（原 `kirara_route`，此时 `mode` 必须显式给） |
-| `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读那些几百 KB 的技术文档 |
+| `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读那些几百 KB 的技术文档。顺带做一次**死链自检**：`PROJECTS` 里登记了但磁盘上不存在的文档路径会在末尾以 `⚠️ 失效文档路径（n）` 列出（都正常时这一行不出现，零成本） |
 | `kirara_docs` | **分章文档检索**。`mode=map` 先看章节地图（章 / 小节 / 显式锚点 / 结构审计），`mode=search` 按关键词返回 `文件:行号` + 所属章/节/锚点，`mode=section` 用 `03.2` 或 `#auth` 只读单节 |
-| `kirara_handoff` | **外部强模型交接**。`action=open` 落下 brief（九节）/ `prompt.md` / `shots/` 并给出可粘贴的 prompt；`action=close` 校验外部回执、写 `report.md` + `report.json`，回出 `changed[]` 喂给 `kirara_docsync`。不发网络请求、不轮询、不执行回执里的任何字符串 |
+| `kirara_handoff` | **外部强模型交接**。`action=open`（`executor=file` 默认给交接目录里的 brief，`executor=chat` 把 brief 正文直接塞进返回值）落下 brief（九节）/ `prompt.md` / `shots/` 并给出可粘贴的 prompt；`action=close` 校验外部回执、写 `report.md` + `report.json`，回出 `changed[]` 喂给 `kirara_docsync`，可选用 `verifyBuild=stat/rerun` 把回执自述与磁盘/复跑结果对一遍。不发网络请求、不轮询、不执行回执里的任何字符串 |
 | `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部。media 是双端，`target` 可选 `android` / `ios-klib` / `ios-framework` / `ios`（`ios` 会跑模拟器自检并直接产出 UI 截图） |
 | `kirara_verify` | 产出分步的真机验收清单（步骤 + 预期结果）；传入截图路径可以额外拿到一段视觉复核协议，`purpose=ui-design` 时给的是「该怎么改」的 P0/P1 修改建议 |
 | `kirara_docsync` | **文档同步**。自行判断本轮改动属于新功能 / BUG 修复 / 界面改动 / 纯内部整理，按 `frontmatter.files` + 标题关键词选章、选节，产出**插入位置**（改哪节，或在第几行新增 `## NN.M` + 锚点）、frontmatter 补文件、99 变更记录条目与写作规范 |
@@ -592,6 +592,39 @@ kirara_docsync({ feature: '设置页加暗色开关', changes: ['Kirara_Media/..
 kirara_summary({ feature: '设置页加暗色开关', mode: 'full', changes: [...] })
 ```
 
+#### 两个投递/校验参数（0.4.1）
+
+外部模型分两种：**能读本地文件的**（IDE / CLI 里的编码智能体）和**只在聊天框里的**。
+回执也分两种：**真跑过构建的**和**只是这么写的**。两个参数各管一头：
+
+| 参数 | 取值 | 做什么 |
+| --- | --- | --- |
+| `executor`（`open`） | `file`（默认） | 现状：`prompt.md` 只给交接目录与 `brief.md` 的绝对路径，正文在文件里 |
+| | `chat` | 把 brief 正文**整段嵌进返回值**（等价 `inline=true`，仍受 `handoffBudgetChars` 限制），`prompt.md` 顶部改成「以下是完整 brief，直接读」，并补一句「如内容被截断，请向用户索取 `brief.md` 全文」 |
+| `verifyBuild`（`close`） | `off`（默认） | 现状：只做结构校验，回执自述原样落账 |
+| | `stat` | 只校验：`changed[].file` 与 `screenshots[].path` 是否真实存在，结果进 `report.json.verification.dshStat` |
+| | `rerun` | 额外对 `changed[]` 涉及的端**真跑一次构建**（复用 `kirara_build` 的执行函数，不递归调用工具），`ok` / `exitCode` / 耗时进 `report.json.verification.dshRerun`，与回执自述不一致时写进 `openIssues` 与 `nextStep` |
+
+```js
+// 纯聊天里的外部模型：一次拿到完整 brief
+kirara_handoff({ action: 'open', request: '设置页加暗色开关', executor: 'chat' })
+
+// 回执可疑时：先校验落盘，再让 DSH 自己复跑一遍构建
+kirara_handoff({
+  action: 'close',
+  runId: 'KH-20261127-1807',
+  report: '<外部回执原文>',
+  verifyBuild: 'rerun',
+})
+// → verification: { build: 'ok', dshStat: { changedMissing: [], screenshotsMissing: [] },
+//                   dshRerun: [{ project: 'media', ok: true, exitCode: 0, durationMs: 41200 }] }
+//   复跑失败**不会**让 close 整体失败：回执照账，差异进 openIssues / nextStep
+```
+
+两个取舍：`stat` / `rerun` 的结果只写进 `report.json`（`report.md` 永远是回执原文，一字不改）；
+`rerun` 的构建失败只是「差异」，不是「close 失败」—— 否则「回执说构建过了但其实没过」这件事
+会因为一次异常彻底丢失。
+
 四条边界是刻意划的：
 
 - **不管理外部模型。** 插件不发请求、不轮询、不做网络探测 —— 文件和人是唯一的传递通道。
@@ -668,7 +701,7 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 调大这些值等于主动换取更频繁的压缩与更低命中率 —— 真要调，请同时跑
 `node scripts/cache-budget.mjs` 并同步改里面的预算基线。
 
-工具目录本身也在预算内：11 个工具的 `name+description+parameters` 合计 **11955 字节**
+工具目录本身也在预算内：11 个工具的 `name+description+parameters` 合计 **11740 字节**
 （8 个工具时是 6496；新增 `kirara_release` 与 `kirara_release_notes` 带来 +2565，是本插件迄今
 最大的一次目录增长；media 双端那次给 `kirara_build` 加 `target` 又加了 +402；2026-11 的分章文档层
 给 `kirara_docs` 加 `mode/chapter/section`、给 `kirara_docsync` 加章节/插入计划描述，合计 +903）。
@@ -681,8 +714,13 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 
 2026-11 的第六轮是**唯一一次「加工具的同时减工具」**：删掉 `kirara_route`（−620）把能力并入
 `kirara_start(detail="route")`（+133 —— 只多了 detail 参数与两处分支），再新增 `kirara_handoff`（+889），
-净增 402 字节（−620 +133 +889）—— 所以总数仍是 11 个工具，只比上一轮多 402 字节。**这一轮之后只剩 45 字节余量**：
-再想往工具目录里加东西，必须先在同一轮里删掉等量的描述字数，而不是抬 `toolSchemaBytes` 基线
+净增 402 字节（−620 +133 +889）—— 所以总数仍是 11 个工具，只比上一轮多 402 字节。
+
+0.4.1（批次 2 收尾）在 `kirara_handoff` 上补了 `executor` 与 `verifyBuild` 两个参数（+280）、
+在 `kirara_profile` 的输出 schema 里补了 `docIssues`（+50），合计 **+330，总数 11740 / 12000，余量 260**：
+两个参数换掉的是「外部模型读不到文件却只拿到一个路径」与「回执说构建过了但没人验」，
+`docIssues` 换掉的是「`PROJECTS` 里一条死链长期没人发现」。再想往工具目录里加东西，
+仍要先在同一轮里删掉等量的描述字数，而不是抬 `toolSchemaBytes` 基线
 （抬基线等于用常驻前缀换一次性的方便）。
 
 ## 兼容性
