@@ -731,6 +731,14 @@ api 的**发版版本源**（`release.versionFrom`）指向的是同一篇已消
 `kirara_release --project api` 仍以「无法确定发布版本号」阻断：新分章集里没有 `kirara-api:X.Y.Z`
 字面量，版本真相该落在哪一篇属于单独一批的决策，这里不猜。
 
+0.4.3 修一个**自更新同步失败**的现场问题：界面点「同步更新」报
+`产物包名是 undefined，与 @kirara/dsh-plugin-kirara-dev 不符`。链路是两个缺陷叠加 ——
+远端判据 `commits?path=lib` 会落到印章提交（它也改 `lib/build-info.js`），
+而那个提交的 `package.json` 恰好带 UTF-8 BOM（Windows 侧写入的），`JSON.parse` 直接抛，
+`readJson()` 吞掉异常返回 `{}`，于是「包名」变成 `undefined`。
+修法：`readJson()` 统一剥 BOM 再解析，并把「读不出 name」与「名字不符」拆成两条可诊断的报错。
+`scripts/update-e2e.mjs` 的假产物从此**故意带 BOM**，作为常驻回归（去掉修复即复现同一句报错）。
+
 ## 兼容性
 
 `peerDependencies` 声明为 `@deepseek-ai/dsh-tools@^0.2.0-rc.2`，覆盖 DSH 0.2.x 全系列

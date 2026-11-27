@@ -121,8 +121,12 @@ async function main() {
   fs.writeFileSync(path.join(pkgDir, 'lib', 'impl.js'), implSource('v1'));
 
   // 假的 GitHub：只服务 commits 与 codeload 两个端点。
+  // 产物里的 package.json **故意带 UTF-8 BOM**：真实仓库里出现过这种提交（Windows 侧
+  // Set-Content 写的），而 JSON.parse 见到 BOM 会直接抛，update.js 的 readJson 会退成 {}，
+  // 现象是「产物包名是 undefined」——与根因毫无关系的一句话。这里的 BOM 就是那条回归：
+  // 去掉 readJson 里的剥 BOM，本脚本会立刻红。
   const tarball = makeTarball(manifest.name.split('/').pop() + '-' + FAKE_SHA, {
-    'package.json': JSON.stringify({ name: manifest.name, version: '0.3.0', type: 'module' }, null, 2),
+    'package.json': '\uFEFF' + JSON.stringify({ name: manifest.name, version: '0.3.0', type: 'module' }, null, 2),
     'lib/impl.js': implSource('v2'),
     'lib/index.js': fs.readFileSync(path.join(pkgDir, 'lib', 'index.js'), 'utf8'),
     'lib/update.js': fs.readFileSync(path.join(pkgDir, 'lib', 'update.js'), 'utf8'),
