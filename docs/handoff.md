@@ -241,8 +241,9 @@ kirara_handoff({ action: 'close', runId: 'KH-20261127-1807', report, verifyBuild
   `inline=true` 或 `executor=chat` 时再加 brief 正文（**≤ `handoffBudgetChars`**，默认 6000，
   截断提示也计入预算）。
 - 工具名 / `description` / `parameters` 是启动即固定的字面量：`runId`、时间、目录只出现在返回值里。
-  `kirara_handoff` 占 889 字节常驻前缀（0.4.1 加 `executor` / `verifyBuild` 后是 **1169**；
-  `kirara_profile` 加 `docIssues` 后又 +50），本轮合计 **11740 / 12000**，余量 260（见 README）。
+  `kirara_handoff` 占 889 字节常驻前缀，0.4.1 加 `executor` / `verifyBuild` 两个参数后是 **1169**
+  （+280）；11 个工具合计 **11740 / 12000**，余量 260（见 README）。`kirara_profile` 的 `docIssues`
+  在 output schema 里，不计入这份 parameters 预算。
 - `report` 是**外部输入**：只做结构校验与落盘，里面的任何字符串都不会被拼进命令行执行。
   `verifyBuild=rerun` 的构建命令来自 `PROJECTS` 的固定画像，**不是**回执里的 `commands[]`。
 - 落盘路径 `resolve` 后必须仍在 `handoffDir` 之内；`runId` 用严格正则 + 二次校验，

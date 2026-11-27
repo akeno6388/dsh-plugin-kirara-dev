@@ -716,11 +716,11 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 `kirara_start(detail="route")`（+133 —— 只多了 detail 参数与两处分支），再新增 `kirara_handoff`（+889），
 净增 402 字节（−620 +133 +889）—— 所以总数仍是 11 个工具，只比上一轮多 402 字节。
 
-0.4.1（批次 2 收尾）在 `kirara_handoff` 上补了 `executor` 与 `verifyBuild` 两个参数（+280）、
-在 `kirara_profile` 的输出 schema 里补了 `docIssues`（+50），合计 **+330，总数 11740 / 12000，余量 260**：
-两个参数换掉的是「外部模型读不到文件却只拿到一个路径」与「回执说构建过了但没人验」，
-`docIssues` 换掉的是「`PROJECTS` 里一条死链长期没人发现」。再想往工具目录里加东西，
-仍要先在同一轮里删掉等量的描述字数，而不是抬 `toolSchemaBytes` 基线
+0.4.1（批次 2 收尾）在 `kirara_handoff` 上补了 `executor` 与 `verifyBuild` 两个参数（**+280**，889 → 1169），
+合计 **11740 / 12000，余量 260**（`kirara_profile` 的 `docIssues` 落在 **output schema** 里，
+不在这份 parameters 常驻预算内）：两个参数换掉的是「外部模型读不到文件却只拿到一个路径」与
+「回执说构建过了但没人验」，`docIssues` 换掉的是「`PROJECTS` 里一条死链长期没人发现」。
+再想往工具目录里加东西，仍要先在同一轮里删掉等量的描述字数，而不是抬 `toolSchemaBytes` 基线
 （抬基线等于用常驻前缀换一次性的方便）。
 
 ## 兼容性
