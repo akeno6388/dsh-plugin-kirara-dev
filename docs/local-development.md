@@ -128,13 +128,13 @@ node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 4) 真宿主派�
 
 | 脚本 | 覆盖的失败面 | 是否走宿主真实代码 |
 | --- | --- | --- |
-| `selftest.mjs` | 工具**业务逻辑**：注册 + 逐个执行（含一次真实 `dotnet build`）、`mode=docs` 判定的三类反例、`needScreenshots` 兜底、`kirara_docsync` 的变化定性、发布链路（三端 `release_notes` + `dryRun` 计划 + 一个**合成 git 仓库**钉住提交分类与去重规则） | ✗ 假 `ctx.tools` |
+| `selftest.mjs` | 工具**业务逻辑**：注册 + 逐个执行（含一次真实 `dotnet build`）、`mode=docs` 判定的三类反例、`needScreenshots` 兜底、`kirara_docsync` 的变化定性、发布链路（三端 `release_notes` + `dryRun` 计划 + 一个**合成 git 仓库**钉住提交分类与去重规则）、实时视觉环的闭环判据与接线（未闭环时 start/verify/summary 是否点名、配了 `uiMcp*` 才注册 MCP） | ✗ 假 `ctx.tools` |
 | `deploy.mjs` | **部署形态**：profile 副本 == 源码、profile 里无宿主包副本 | ✗ 只做文件/清单断言 |
 | `mount-check.mjs` | **解析归层**：复现 `routeScoped` 的两锚点判定 + 清单形态 | ✗ 模拟判定 |
 | `contract-test.mjs` | **真实调度链路**：真 `cordis.Context` + 真 `ToolRuntime`，逐个 `prepare()`。⚠️ **本机宿主上已整段失效** —— 它查的 `TOOL_RUNTIME_SCHEDULER` 从 0.2.2-rc.1 起不再导出，见 [事故六](troubleshooting.md) | ✓ 全真（但取执行器的方式过期） |
-| `host-dispatch.mjs` | **真宿主派发**（顶 `contract-test` 的位置）：真 `Context` + `ToolsService` + `@deepseek-ai/dsh-tool-executor-native`，把 10 个工具挨个派发，含 iOS 分支（`target=ios` 的 `macCommands`、media 的 iOS 验证清单、`profile` 的 `ios` 块）与分章文档的 `map` / `section` / 章节插入计划分支 | ✓ 全真（**现行** API） |
+| `host-dispatch.mjs` | **真宿主派发**（顶 `contract-test` 的位置）：真 `Context` + `ToolsService` + `@deepseek-ai/dsh-tool-executor-native`，把 11 个工具挨个派发，含 iOS 分支（`target=ios` 的 `macCommands`、media 的 iOS 验证清单、`profile` 的 `ios` 块）与分章文档的 `map` / `section` / 章节插入计划分支，以及 `kirara_ui` 的 plan/status/review 三个分支 | ✓ 全真（**现行** API） |
 | `doc-layer-test.mjs` | **分章文档层**：临时工作区造「单卷 99」与「多卷 99」两种形态，断言发现规则、map/search/section、frontmatter.files 选章、既有/新增小节、BUG 修复不新开小节、历史编号 +1、00 索引提示、结构审计 | ✗ 假 `ctx.tools` |
-| `cache-budget.mjs` | **前缀缓存预算**：工具目录逐字节稳定 + 描述无易变内容 + 每个工具的返回值不超预算 | ✗ 假 `ctx.tools`（含一次假 `gradlew.bat` 真派发） |
+| `cache-budget.mjs` | **前缀缓存预算**：工具目录逐字节稳定 + 描述无易变内容 + 每个工具的返回值不超预算 + `kirara_ui` 的环语义（采纳截图编号、未修项不算闭环、零截图不算闭环） | ✗ 假 `ctx.tools`（含一次假 `gradlew` / `gradlew.bat` 真派发） |
 | `contract-test.mjs` 的 §6.5 | **可选键边界**：`artifact` / `screenshotReview` / `needScreenshots` 三类条件展开键，以及 `mode=docs` 的短路分支 | ✓ 全真 |
 | `contract-test.mjs` 的 §6.7 | **发布链路端到端**：临时仓库 + 假发布脚本，但真找产物、真改名、真搬目录、真算 SHA256、真写 `.sha256`；以及 README 门禁的拦下 / `force` 放行 / 提交后自动放行三段行为 | ✓ 全真 |
 
@@ -160,13 +160,14 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 
 | 常量 | 值 | 实测 | 说明 |
 | --- | --- | --- | --- |
-| `toolSchemaBytes` | 10400 | 10156（10 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565；media 双端 +402；2026-11 分章文档层 +903。还剩 244 字节余量 —— 想再往 description 里加字，先确认值不值一次前缀抖动 |
+| `toolSchemaBytes` | 12000 | 11553（11 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565；media 双端 +402；2026-11 分章文档层 +903；同月实时视觉环 `kirara_ui` +1397。还剩 447 字节余量 —— 想再往 description 里加字，先确认值不值一次前缀抖动 |
 | `docsRenderChars` | 4400 | 3869（search）/ 3817（section）/ 1645（map） | 宽泛关键词 + `maxHits=40`；section 的正文上限是 `docsBudgetChars − 300` |
 | `buildRenderChars` | 5600 | 5197 | 200 行 × 400 字符的假构建日志 |
 | `startRenderChars` | 1400 | 1302 | 长需求 + `auto`（含 UI + 文档同步两条额外步骤）。iOS 那条步骤只在命中 `IOS_SIGNALS` 时出现，本用例不计入 |
-| `verifyRenderChars` | 2000 | 1442 | `purpose=ui-design` + 截图，协议最长 |
-| `verifyIosRenderChars` | 2100 | 1979 | media 的 **iOS** 清单（模拟器自检 + DeviceHub 两步比 Android 多）；这条路径在 Windows 上也能被夹具走到（summary 里带 iOS 词即可），因为 `screenshotReview.instruction` 是要被原样执行的提示词，被截断即失效 |
+| `verifyRenderChars` | 2200 | 2121 | `purpose=ui-design` + 截图，协议最长（2026-11 加「视觉环未闭环」那一步后抬高，协议被截断即失效） |
+| `verifyIosRenderChars` | 2100 | 2045 | media 的 **iOS** 清单（模拟器自检 + DeviceHub 两步比 Android 多）；这条路径在 Windows 上也能被夹具走到（summary 里带 iOS 词即可），因为 `screenshotReview.instruction` 是要被原样执行的提示词，被截断即失效 |
 | `docsyncRenderChars` | 2500 | 1827 | 三端混合、4 篇目标（含分章插入计划与写法规则） |
+| `uiRenderChars` | 2800 | 1290（plan）/ 602（review） | `uiLoopBudgetChars=2600` + 截断提示；plan 是最长分支（设备 + MCP 行 + 5 步 + 8 条设计轴） |
 | `narrativeHardCap` | 2400 | 2444（含截断说明） | `textBudgetChars` 默认值；原 1600，因为 UI 设计复核协议被截断即失效 |
 | `releaseNotesRenderChars` | 3600 | 2590 | `releaseNotesBudgetChars`（3200）+ 头部；取后端仓库这个最大区间 |
 | `releaseRenderChars` | 3400 | 251 | `releaseBudgetChars`（3000）+ 头部；`dryRun` 计划 |

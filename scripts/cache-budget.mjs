@@ -47,18 +47,32 @@ const WORKSPACE_ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(
  *     mode/chapter/section 参数与 kirara_docsync 的章节/插入计划描述。换掉的是「整篇 258 KB
  *     文档塞上下文」与「文档写错位置」——分章集要先 map 再 section，才能既省 token 又能稳定定位。
  *     卡在 10400（仍比一次 compaction 的代价小两个数量级）。
+ *   2026-11 第五轮（实时视觉环 kirara_ui，随 MCP 服务器更新而来）：11 个工具 11553 字节（+1397）。
+ *     增量是 action/platform/paths/note/issues 五个参数与一段「先发现 MCP、再 shot → 改 → review」
+ *     的描述。为什么值：原来 UI 改动的反馈周期是「改代码 → 全量自检脚本(约 4 分钟) → 4 张固定
+ *     截图 → 返工」，一次样式返工就是十几分钟；现在内环是「截一张图 → 看图 → 改」，秒级。
+ *     卡在 12000：这一轮把「反馈周期」而不是「更多文档」换成了前缀成本，增量是可控的一次性投入。
  */
 const BUDGET = {
-  /** 10 个工具的 name+description+parameters JSON 总字节上限。 */
-  toolSchemaBytes: 10400,
+  /** 11 个工具的 name+description+parameters JSON 总字节上限。 */
+  toolSchemaBytes: 12000,
   /** kirara_docs 单次 render 的字符上限（插件默认 docsBudgetChars=4000 + 截断提示）。 */
   docsRenderChars: 4400,
   /** kirara_build 单次 render 的字符上限（buildBudgetChars=5000 + 头部状态行）。 */
   buildRenderChars: 5600,
   /** kirara_start 单次 render 的字符上限（实测最坏情况：长需求 + full/auto ≈ 1356）。 */
   startRenderChars: 1400,
-  /** kirara_verify full 单次 render 的字符上限（含 ui-design 复核协议 ≈ 1388）。 */
-  verifyRenderChars: 2000,
+  /**
+   * kirara_verify full 单次 render 的字符上限（ui-design 复核协议实测 2121）。
+   * 2026-11 从 2000 抬到 2200：这一轮加了「视觉环未闭环」那一步与 kirara_ui 取图说明，
+   * 协议长了约 100 字符。这条是**要被原样执行**的提示词，宁可抬预算也不截断协议本身。
+   */
+  verifyRenderChars: 2200,
+  /**
+   * kirara_ui 单次 render 的字符上限（uiLoopBudgetChars=2600 + clampText 的截断提示）。
+   * plan 是三个分支里最长的（设备行 + 每个 MCP 命名空间一行 + 5 步 + 8 条设计轴）。
+   */
+  uiRenderChars: 2800,
   /**
    * kirara_verify 走 **media 的 iOS 清单**时的上限。
    * 为什么单独一条：iOS 的验收步骤比 Android 多两步（模拟器自检 + DeviceHub 人肉），
@@ -98,8 +112,12 @@ const bad = (msg, detail) => {
 };
 const ok = (msg, detail) => console.log(`  ✓ ${msg}${detail ? `\n      ${detail}` : ''}`);
 
-/** 用假 ctx 跑一次 apply，拿回注册结果（与 scripts/selftest.mjs 同一套夹具思路）。 */
-async function register(root = WORKSPACE_ROOT) {
+/**
+ * 用假 ctx 跑一次 apply，拿回注册结果（与 scripts/selftest.mjs 同一套夹具思路）。
+ * @param {string} [root] 工作区根（默认真实 workspace）
+ * @param {object} [extra] 额外覆盖的配置（例如把 uiLoopDir 挪到临时目录，避免写脏真实仓库）
+ */
+async function register(root = WORKSPACE_ROOT, extra = {}) {
   const mod = await import(pluginPath);
   const live = new Map();
   const canonical = new Map();
@@ -122,7 +140,7 @@ async function register(root = WORKSPACE_ROOT) {
       },
     },
   };
-  const config = { workspaceRoot: root, buildTimeoutMs: 1200000 };
+  const config = { workspaceRoot: root, buildTimeoutMs: 1200000, ...extra };
   mod.apply(ctx, config);
   return { live, canonical };
 }
@@ -145,7 +163,7 @@ const firstLive = run1.live;
 const names = [...first.keys()].sort();
 console.log(`  已注册 ${names.length} 个工具：${names.join(', ')}`);
 
-const EXPECTED = ['kirara_build', 'kirara_docs', 'kirara_docsync', 'kirara_profile', 'kirara_release', 'kirara_release_notes', 'kirara_route', 'kirara_start', 'kirara_summary', 'kirara_verify'];
+const EXPECTED = ['kirara_build', 'kirara_docs', 'kirara_docsync', 'kirara_profile', 'kirara_release', 'kirara_release_notes', 'kirara_route', 'kirara_start', 'kirara_summary', 'kirara_ui', 'kirara_verify'];
 const missing = EXPECTED.filter((n) => !first.has(n));
 const extra = names.filter((n) => !EXPECTED.includes(n));
 if (missing.length || extra.length) {
@@ -320,10 +338,16 @@ console.log('\n=== 6. kirara_build 的日志硬预算（临时假工程，200 �
     await mkdir(media, { recursive: true });
     const noise = 'X'.repeat(400);
     const lines = Array.from({ length: 200 }, (_, i) => `echo ${i}-${noise}`);
+    // 两个 wrapper 都要有：macOS/Linux 上插件走 `sh ./gradlew`，Windows 上走 `gradlew.bat`。
+    // 只写 .bat 的话，这台机器（macOS）上构建直接「找不到 gradlew」，日志只有一行 ——
+    // 于是「截断必须说明」这条断言测的根本不是截断（基线一直是红的，正是这么来的）。
+    await writeFile(join(media, 'gradlew'), `#!/bin/sh\n${lines.join('\n')}\nexit 0\n`, { mode: 0o755 });
     await writeFile(join(media, 'gradlew.bat'), `@echo off\r\n${lines.join('\r\n')}\r\nexit /b 0\r\n`);
 
     const run = await register(tmp);
-    const { value, text } = await exec(run.live, 'kirara_build', { project: 'media' });
+    // target 必须显式给 android：auto 在 macOS 上会走 iOS 自检脚本（假工程里没有），
+    // 那样测到的是「脚本不存在」而不是 gradle 日志的截断行为。
+    const { value, text } = await exec(run.live, 'kirara_build', { project: 'media', target: 'android' });
 
     if (text.length > BUDGET.buildRenderChars) {
       bad(`kirara_build: render ${text.length} 字符超出预算 ${BUDGET.buildRenderChars}`);
@@ -345,6 +369,120 @@ console.log('\n=== 6. kirara_build 的日志硬预算（临时假工程，200 �
       bad('kirara_build: logTail 被截断但没有说明（模型会以为自己看到了完整日志）');
     } else {
       ok('kirara_build: 截断说明已附在 logTail 里');
+    }
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+}
+
+console.log('\n=== 7. kirara_ui 实时视觉环（临时工作区，不碰真实仓库的证据目录） ===');
+{
+  // 为什么要独立工作区：kirara_ui 会**写**证据与状态（shot/review）。在真实 workspace 上跑，
+  // 就会往 kirara_media/iosApp/.tmp/ui-loop 里塞夹具截图，并改掉「这一轮到底看过没有」的事实。
+  const tmp = await mkdtemp(join(tmpdir(), 'kirara-ui-'));
+  try {
+    const media = join(tmp, 'Kirara_Media');
+    await mkdir(join(media, 'iosApp', '.tmp'), { recursive: true });
+    // 1×1 透明 PNG：夹具要的是「它是一张图并且能被采纳」，不是像素内容。
+    const pngBytes = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const shotA = join(tmp, 'a.png');
+    const shotB = join(tmp, 'b.png');
+    await writeFile(shotA, pngBytes);
+    await writeFile(shotB, pngBytes);
+
+    const loopDir = join(tmp, 'ui-loop');
+    const run = await register(tmp, { uiLoopDir: loopDir, uiLoopTimeoutMs: 15000 });
+
+    // (a) plan：没有设备也不许抛；三张预算都要够，最长的是 plan。
+    const plan = await exec(run.live, 'kirara_ui', { action: 'plan', platform: 'android' });
+    if (plan.text.length > BUDGET.uiRenderChars) {
+      bad(`kirara_ui（plan）: render ${plan.text.length} 字符超出预算 ${BUDGET.uiRenderChars}`);
+    } else {
+      ok(`kirara_ui（plan，最长分支）: ${plan.text.length} ≤ ${BUDGET.uiRenderChars} 字符`);
+    }
+    if (plan.value.action !== 'plan' || plan.value.platform !== 'android') {
+      bad('kirara_ui: action/platform 未原样回显');
+    } else {
+      ok('kirara_ui: action 与 platform 原样回显', `device="${plan.value.device || '(无设备)'}"`);
+    }
+    // 没有任何 MCP 时也必须给出兜底路径（否则「少装一个服务」就变成环停摆）。
+    if (!/simctl|adb/.test(plan.text)) {
+      bad('kirara_ui: 发现不到 MCP 时没有给出 simctl/adb 兜底说明');
+    } else {
+      ok('kirara_ui: 无 MCP 时给出 simctl / adb 兜底说明');
+    }
+
+    // (b) shot 采纳：截图必须被编号进证据目录，且状态里记上。
+    const adopt = await exec(run.live, 'kirara_ui', { action: 'shot', platform: 'android', paths: [shotA, shotB], note: '夹具：采纳两张' });
+    if (adopt.value.shots.length !== 2 || adopt.value.shotCount !== 2) {
+      bad(`kirara_ui（shot 采纳）: 期望接纳 2 张，实际 shots=${adopt.value.shots.length} shotCount=${adopt.value.shotCount}`);
+    } else {
+      ok('kirara_ui（shot 采纳）: 两张截图进编号证据', adopt.value.shots.map((s) => s.split('/').pop()).join(', '));
+    }
+    const numbered = adopt.value.shots.every((s) => /shot-\d\d\.png$/.test(s));
+    if (!numbered) bad('kirara_ui（shot 采纳）: 证据文件名没有编号（无法回看第几轮）');
+    else ok('kirara_ui（shot 采纳）: 证据按 shot-NN.png 编号');
+
+    // (c) 不存在的路径不许静默成功 —— 那会让「看没看」这件事失真。
+    const missing = await exec(run.live, 'kirara_ui', { action: 'shot', platform: 'android', paths: [join(tmp, 'nope.png')] });
+    if (missing.value.ok || !/不存在/.test(missing.text)) {
+      bad('kirara_ui（shot 采纳）: 不存在的路径没有明确报错');
+    } else {
+      ok('kirara_ui（shot 采纳）: 不存在的路径明确报错且 ok=false');
+    }
+
+    // (d) review 带未修项 → 未闭环；清空 → 闭环。这条是「不许蒙眼宣布完成」的机器化落实。
+    const withIssues = await exec(run.live, 'kirara_ui', {
+      action: 'review',
+      platform: 'android',
+      issues: ['详情页卡片圆角 18 → 14', '评论抽屉描边深色档不可见'],
+    });
+    if (withIssues.value.closed || withIssues.value.openIssues !== 2) {
+      bad(`kirara_ui（review 带 issues）: 期望未闭环且 2 条未修，实际 closed=${withIssues.value.closed} open=${withIssues.value.openIssues}`);
+    } else {
+      ok('kirara_ui（review 带 issues）: closed=false 且未修条数=2');
+    }
+    const clean = await exec(run.live, 'kirara_ui', { action: 'review', platform: 'android' });
+    if (!clean.value.closed || clean.value.openIssues !== 0) {
+      bad(`kirara_ui（review 清空）: 期望闭环，实际 closed=${clean.value.closed} open=${clean.value.openIssues}`);
+    } else {
+      ok('kirara_ui（review 清空）: 闭环成立（截图 ≥1 且迭代 ≥1 且无未修）');
+    }
+    const status = await exec(run.live, 'kirara_ui', { action: 'status' });
+    if (!status.value.closed || status.value.iterations < 2) {
+      bad(`kirara_ui（status）: 期望读到闭环状态，实际 closed=${status.value.closed} iterations=${status.value.iterations}`);
+    } else {
+      ok('kirara_ui（status）: 读到闭环状态', `截图 ${status.value.shotCount} 张 / 迭代 ${status.value.iterations} 轮`);
+    }
+    if (status.text.length > BUDGET.uiRenderChars) {
+      bad(`kirara_ui（status）: render ${status.text.length} 字符超出预算 ${BUDGET.uiRenderChars}`);
+    } else {
+      ok(`kirara_ui（status）: ${status.text.length} ≤ ${BUDGET.uiRenderChars} 字符`);
+    }
+
+    // (e) 一轮都没迭代就宣告收敛 —— 必须被点出来，不能当闭环。
+    const fresh = join(tmp, 'ui-loop-fresh');
+    const run2 = await register(tmp, { uiLoopDir: fresh, uiLoopTimeoutMs: 15000 });
+    const premature = await exec(run2.live, 'kirara_ui', { action: 'review', platform: 'android' });
+    if (premature.value.closed || !/没有任何截图|没看过/.test(premature.text)) {
+      bad('kirara_ui: 零截图直接 review 被判成闭环（等于没看就宣布完成）');
+    } else {
+      ok('kirara_ui: 零截图直接 review 不算闭环，并明确提示先截图');
+    }
+
+    // (f) review 超大 issues 的预算（最坏情况：24 条长文本）。
+    const heavy = await exec(run.live, 'kirara_ui', {
+      action: 'review',
+      platform: 'android',
+      issues: Array.from({ length: 24 }, (_, i) => `第 ${i} 条：把详情页卡片的圆角从 18 改成 14，并把描边透明度从 0.08 抬到 0.14`),
+    });
+    if (heavy.text.length > BUDGET.uiRenderChars) {
+      bad(`kirara_ui（review 超大 issues）: render ${heavy.text.length} 字符超出预算 ${BUDGET.uiRenderChars}`);
+    } else {
+      ok(`kirara_ui（review 超大 issues）: ${heavy.text.length} ≤ ${BUDGET.uiRenderChars} 字符`);
     }
   } finally {
     await rm(tmp, { recursive: true, force: true });

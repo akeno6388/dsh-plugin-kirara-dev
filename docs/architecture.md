@@ -455,6 +455,68 @@ feat(应用内更新): 应用内 APK 下载/校验/安装，并修正互动预�
 模型选择依据：profile 的 `llm-pi-ai` 配置里，`ecnu-plus` 是声明了 `input: [text, image]` 的模型；
 `ecnu-max` 仅文本；`ecnu-image-pro` 已下线。
 
+## 实时视觉迭代环（`kirara_ui`，2026-11）
+
+「截图复核」解决的是「改完有没有人看过」，但它发生在**整条自检链路之后**：
+改代码 → 全量自检（约 4 分钟）→ 4 张固定截图 → 看着返工。内环之所以慢，是因为三个结构性事实：
+
+1. 截图是**构建脚本的副产物**，不是「我想看哪屏就看哪屏」；
+2. `simctl` 不能点也不能打字（P0 清单 §9.7），「先走到目标界面再截图」在 iOS 上原本无解；
+3. 一次「改 → 看」的反馈周期 = 一条自检脚本，而不是一张图。
+
+MCP 服务器更新后，三个事实被补上：Xcode MCP 的 `DeviceInteractionSynthesize` 能在模拟器上
+点按/输入并回传截图 + UI 层级，`RenderPreview` 能直接渲染 SwiftUI 预览；Android 侧有
+`adb-mcp` / `mobile-mcp` 这类设备控制服务提供截图、点击、UI 树。但「能调」不等于「会调」——
+模型不知道本机装了哪个、工具叫什么、参数怎么填时，就会退回盲改。
+
+这一层因此只做四件事：
+
+| 职责 | 实现 | 为什么这样做 |
+| --- | --- | --- |
+| **发现** | `discoverUiMcp(ctx.tools.definitions())` | 工具名是宿主解析后的真实集合，`mcp__<ns>__<raw>` 里按名字认出截图 / 点按 / UI 树 / 预览四类能力。**只输出能力名，不倒全表**——返回值会永久留在上下文里 |
+| **兜底桥** | `probeIosDevice` / `probeAndroidDevice` / `captureShot` | 本机本来就装了 `simctl` / `adb`。少了第三方 MCP 也要能出图，否则「少装一个服务」直接变成环停摆 |
+| **证据** | `<Kirara_Media>/iosApp/.tmp/ui-loop/shot-NN.png` + `state.json` | 证明「看过」的是**文件**，不是模型的自述。目录在 media 的 `.gitignore` 里整棵忽略，`gradlew clean` 也不会动它 |
+| **迭代** | `iterations` / `openIssues` | `review` 带 `issues` 就记一轮；`closed = 截图 ≥1 ∧ 迭代 ≥1 ∧ 未修 = 0`。`kirara_verify` 与 `kirara_summary` 读同一份判据 |
+
+### 四个 action
+
+| `action` | 作用 | 副作用 |
+| --- | --- | --- |
+| `plan`（默认） | 探测设备 + 发现 MCP，输出「这一轮怎么转」的五步与 8 条设计轴 | 无（只读） |
+| `shot` | 抓一张（`simctl io screenshot` / `adb exec-out screencap`）或采纳已有截图（`paths`） | 写证据目录与状态 |
+| `review` | 记一轮迭代；`issues` 非空 = 未闭环并明确「不要写进总结当已完成」，空 = 收敛 | 写状态 |
+| `status` | 只读环状态与闭环判据 | 无 |
+
+### 三个刻意绕开的坑
+
+**① `adb exec-out screencap` 不能走字符串管道。** `runProcess()` 把 stdout 当 UTF-8 拼接，
+PNG 会变成坏图**且不报错**。所以另有一个 `runProcessToFile()`（`createWriteStream` + 二进制管道），
+并且等 `stream.end()` 回调再收尾，否则紧接着读文件会拿到截断的图。
+
+**② 模拟器要按 UDID 选，不能按写死的机型名。** `PROJECTS.media.ios.device` 写的是
+`iPhone 18 Pro`，而某台机器上只装了 `18 Pro Max`：`xcodebuild` 会回落 "My Mac" 并报
+doesn't match 平台。`pickSimulator()` 的优先级是「配置名 → booted 的 iPhone → 任意 booted →
+第一台可用 iPhone」，与 `run-simulator.sh` 的自愈逻辑一致。
+
+**③ 「点按」这一格必须挑真正执行手势的工具。** Xcode MCP 里 `DeviceInteractionStartSession`
+与 `DeviceInteractionSynthesize` 名字都含 `interaction`，但只有后者接受 `'t x y'`。
+所以发现顺序是 `synthesize` → `tap/click/swipe` → `interaction`。
+
+### 与既有链路的关系
+
+- `kirara_start` / `kirara_route`：UI 改动的路线从「构建 → 截图 → 复核」改成「先 `kirara_ui` 内环 → 收敛后 build + verify」；
+- `kirara_build(target='ios')`：全量自检仍然保留，但定位改成**收敛后的验收**（返回值里明说别拿它做迭代）；
+- `kirara_verify`：视觉环未闭环时多给一步「先 `status` 看差什么」；`ui-design` 缺截图时 `needScreenshots` 指向 `kirara_ui`；
+- `kirara_summary`：未闭环写进「遗留风险」，零截图也点名 —— 否则「已完成」就是没有证据的自述。
+
+### 可选：把设备控制 MCP 交给插件注册
+
+配置了 `uiMcpServer` + `uiMcpCommand` 时，`apply()` 会用 `ctx.inject(['mcpManager'], …)` 注册一个
+stdio 服务器（`ctx.mcpManager.register(name, entry)`），生命周期跟随插件：卸载即摘除，不留孤儿。
+
+三条边界：没配 `command` 就什么都不做；用 `ctx.inject` 而不是把 `mcpManager` 写进 `inject` 数组
+（否则没挂 mcp-manager 的 profile 上整个插件挂不起来）；注册失败只打日志，环靠兜底桥继续转。
+
 ## 返回值约束
 
 所有工具的返回值必须是 **lossless JSON**：可选键在条件不成立时要**整键省略**，不能赋 `undefined`。

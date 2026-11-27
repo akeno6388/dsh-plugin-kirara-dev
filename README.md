@@ -416,7 +416,7 @@ md 不参与编译，也没有可验的东西。
 
 ### 直接调用单个工具
 
-跳过路由也可以，十个工具都能单独用：
+跳过路由也可以，十一个工具都能单独用：
 
 ```
 kirara_profile({})                                 // 三端画像
@@ -430,6 +430,11 @@ kirara_docs({ mode: 'section', project: 'desktop', section: '03.2' }) // 按 NN.
 kirara_build({ project: 'media' })                 // Android 端（Windows 默认）
 kirara_build({ project: 'media', target: 'ios' })   // iOS：模拟器自检 + 截图（仅 macOS）
 kirara_build({ project: 'media', target: 'ios-klib' })  // iOS 侧最快门禁（Windows 也能跑）
+kirara_ui({ action: 'plan', platform: 'ios' })         // 实时视觉环：发现 MCP/设备，给出这一轮怎么转
+kirara_ui({ action: 'shot', platform: 'ios' })           // 截一张进编号证据，拿路径去 read_image
+kirara_ui({ action: 'shot', paths: ['/abs/mcp-shot.png'] })  // 采纳 Xcode MCP 回传的截图
+kirara_ui({ action: 'review', issues: ['卡片圆角 18 → 14'] }) // 记一轮迭代；issues 清空才算闭环
+kirara_ui({ action: 'status' })                          // 这一轮到底看过没有（verify/summary 也读它）
 kirara_verify({ summary: '设置页加暗色开关', project: 'media', mode: 'full' })
 kirara_docsync({ feature: '评论支持 @ 提醒', changes: ['Kirara_Server-API/Controllers/CommentsController.cs'] })
 kirara_release_notes({ project: 'api' })            // 发布素材（后端没有版本 tag ⇒ 自动退回首提交）
@@ -486,6 +491,60 @@ kirara_verify({
 插件自身不调用模型，只产出「怎么调」的协议 —— 实际的图像请求由模型按协议发起，
 把每张图作为 attachment 发给支持图像输入的模型。这样插件保持无副作用、可以离线自检。
 
+### 实时视觉迭代环（`kirara_ui`）
+
+截图复核解决的是「改完有没有人看过」，但它仍然发生在**整条自检链路之后**：改代码 → 跑全量自检
+（约 4 分钟）→ 出 4 张固定截图 → 看着返工。所以 2026-11 起 UI 的内环换成 `kirara_ui`：
+
+```
+kirara_ui({ action: 'plan', platform: 'ios' })   // ① 先看这台机器上到底有什么可用
+kirara_ui({ action: 'shot' })                    // ② 截一张（几秒），read_image 真正看图
+kirara_ui({ action: 'review', issues: [...] })   // ③ 把要改的记成一轮
+kirara_build({ project: 'media', target: 'ios' }) // ④ 增量构建 → 回 ②
+kirara_ui({ action: 'review' })                  // ⑤ issues 清空 = 闭环，才允许收尾
+```
+
+三件事是它刻意做的：
+
+**① 先发现，再调用。** `action: 'plan'` 会读宿主**当前真实可用**的工具名
+（`ctx.tools.definitions()`），认出哪些 MCP 命名空间能截图 / 点按 / 出 UI 树 / 渲染预览，
+并把可执行的调用序列写出来。工具描述本身保持字面量（前缀缓存契约），探测结果只出现在返回值里。
+本机实测：
+
+```
+MCP:
+  xcode（36 个工具）: 点按/输入=mcp__xcode__DeviceInteractionSynthesize | 预览=mcp__xcode__RenderPreview | 装/启=mcp__xcode__DeviceInteractionInstallAndRun
+预览快通道: mcp__xcode__RenderPreview（只覆盖 SwiftUI 壳；:shared 的 Compose UI 仍要走 1–4）
+```
+
+这一步同时补上了长期缺口：`simctl` 不能点也不能打字（P0 清单 §9.7），
+而 Xcode MCP 的 `DeviceInteractionSynthesize` 能在模拟器上点按/输入并回传截图 + UI 层级，
+于是「先走到目标界面再截图」在 iOS 上终于可以自动完成。
+
+**② 没 MCP 也不停摆。** 截图有兜底桥：iOS 走 `xcrun simctl io <udid> screenshot`，
+Android 走 `adb exec-out screencap -p`（二进制管道，不走字符串解码，否则拿到的是坏图）。
+发现不到任何 MCP 时照样出图，只是少了「点按/输入」这一段。
+
+**③ 闭环是「事实」，不是自述。** 每张截图按 `shot-NN.png` 编号进
+`<Kirara_Media>/iosApp/.tmp/ui-loop/`（该目录在 media 的 `.gitignore` 里整棵忽略），
+状态记在 `state.json`。`kirara_verify` 在视觉环未闭环时会多给一步「先 status 看差什么」，
+`kirara_summary` 会把未闭环写进**遗留风险**。于是「改了界面但没人看过」这件事从
+「靠模型自觉」变成「工具会点名」。
+
+Android 侧要同样的能力，需要一台跑得起来的设备（真机开 USB 调试，或装 emulator 组件 + 建 AVD），
+以及一个设备控制类 MCP。插件可以代你注册（托管给 `ctx.mcpManager`，插件卸载即摘除）：
+
+```yaml
+- id: kirara-dev
+  config:
+    uiMcpServer: android          # 工具名会是 mcp__android__*
+    uiMcpCommand: /Users/you/.local/bin/adb-mcp
+    uiMcpArgs: '--sdk /Users/you/Library/Android/sdk'
+```
+
+没配就什么都不做（本机没有 npm/npx，自动下载第三方服务器不是插件的职责）。
+即便不配 MCP，Android 的截图与 `adb shell input tap` 也照常可用。
+
 ### 配置项
 
 在 profile 的 `cordis.patch.yml` 里按 id 覆盖：
@@ -509,6 +568,13 @@ kirara_verify({
 | `releaseNotesMaxFiles` | `25` | `kirara_release_notes` 最多列几个改动文件 |
 | `releaseNotesBudgetChars` | `3200` | `kirara_release_notes` 单次返回的字符总预算 |
 | `releaseOutputDir` | `''` | 发布产物落到哪个目录。留空 = 系统桌面（按 shell 的「桌面」文件夹解析，兼容 OneDrive 重定向） |
+| `uiLoopDir` | `''` | `kirara_ui` 的证据/状态目录。留空 = `<Kirara_Media>/iosApp/.tmp/ui-loop`（该目录在 media 的 `.gitignore` 里整棵忽略，且 `gradlew clean` 不会动它） |
+| `uiLoopBudgetChars` | `2600` | `kirara_ui` 单次返回的字符总预算 |
+| `uiLoopMaxShots` | `6` | 一次最多采纳几张截图（超过就是一屏塞满图，反而看不清） |
+| `uiLoopTimeoutMs` | `120000` | 设备动作（截图 / 探测）超时 |
+| `uiMcpServer` | `''` | 可选：由插件代为注册的设备控制 MCP 的 `serverName`（工具名 = `mcp__<这个名字>__*`） |
+| `uiMcpCommand` | `''` | 可选：该 MCP 的可执行文件（绝对路径更稳：Finder 启动的 GUI 进程 PATH 与交互式 shell 不同） |
+| `uiMcpArgs` | `''` | 可选：命令行参数，空格分隔 |
 
 ### 前缀缓存与上下文预算（为什么输出压得这么小）
 
@@ -538,14 +604,16 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 调大这些值等于主动换取更频繁的压缩与更低命中率 —— 真要调，请同时跑
 `node scripts/cache-budget.mjs` 并同步改里面的预算基线。
 
-工具目录本身也在预算内：10 个工具的 `name+description+parameters` 合计 **10156 字节**
+工具目录本身也在预算内：11 个工具的 `name+description+parameters` 合计 **11553 字节**
 （8 个工具时是 6496；新增 `kirara_release` 与 `kirara_release_notes` 带来 +2565，是本插件迄今
 最大的一次目录增长；media 双端那次给 `kirara_build` 加 `target` 又加了 +402；2026-11 的分章文档层
 给 `kirara_docs` 加 `mode/chapter/section`、给 `kirara_docsync` 加章节/插入计划描述，合计 +903）。
 这是**一次性常驻**成本（约 +640 token 的前缀），换来的是三端各自的发布现实被固化下来 —— 发布原本是
 「翻技术栈文档找命令 → 手改版本号 → 手动改名 → 手动搬桌面 → 手动算校验码 → 忘记写 README」，
 每一步都能出错，且出错时产物往往已经发出去了；分章文档层又换掉了「整篇 258 KB 文档塞上下文」
-与「文档写错位置」。基线卡在 10400 字节（仍比一次 compaction 的代价小两个数量级）。
+与「文档写错位置」。2026-11 的实时视觉环（`kirara_ui`）又加了 +1397 —— 它换掉的是「改界面 →
+等 4 分钟全量自检 → 截图 → 返工」这条反馈环，一次样式返工就够抵消这份常驻成本。
+基线卡在 12000 字节（仍比一次 compaction 的代价小两个数量级）。
 
 ## 兼容性
 
@@ -705,12 +773,12 @@ desktop 同理走 `publish_all.ps1`，区别是它产出的安装包文件名固
 
 **为什么没有单元测试？**
 这是项目约定：验证方式 = 构建 + 人工真机清单。所以 `kirara_verify` 产出的是分步骤清单，不是测试代码。
-media 的 iOS 侧把这条约定做得更彻底：模拟器自检脚本本身就截图取证，`kirara_build target=ios`
-的产物直接就是复核素材。
+media 的 iOS 侧把这条约定做得更彻底：`kirara_ui` 直接截当前屏幕（想验哪屏就走到哪屏再截），
+而 `kirara_build target=ios` 的一次性全量自检留给收敛后的验收。
 
 **能用 `kirara_build` 验证这个插件自己吗？**
 不能。`kirara_build` 只覆盖 desktop / api / media 三个子项目。插件自身的验证方式是
-`node scripts/deploy.mjs --check` + `node scripts/host-dispatch.mjs`（真宿主派发，证明 10 个工具的
+`node scripts/deploy.mjs --check` + `node scripts/host-dispatch.mjs`（真宿主派发，证明 11 个工具的
 返回值都被宿主接受）+ 完全重启，见[本地开发](docs/local-development.md)。
 
 **在 Mac 上开发 media 时，插件会替我跑 iOS 构建吗？**
@@ -743,7 +811,7 @@ media 的 iOS 侧把这条约定做得更彻底：模拟器自检脚本本身就
 
 ## 文档
 
-- [架构与项目画像](docs/architecture.md) —— 十个工具的实现、分章文档层、路由判定信号、文档同步规则、发布链路、`PROJECTS` 常量怎么维护
+- [架构与项目画像](docs/architecture.md) —— 十一个工具的实现、分章文档层、路由判定信号、文档同步规则、发布链路、`PROJECTS` 常量怎么维护
 - [分章文档写作规范](docs/doc-conventions.md) —— 目录/编号/frontmatter/锚点/插入模板/审计规则；换项目时照这份约定即可无缝接入
 - [DSH 插件契约](docs/plugin-contract.md) —— 插件要怎么写才会被 DSH 认可并加载
 - [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、四个自检夹具（含真宿主派发）

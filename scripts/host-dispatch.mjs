@@ -1,6 +1,6 @@
 /**
  * 真宿主派发回归 —— 走**现行**的 `ctx.tools.setExecutor()` + native 执行器，
- * 把 10 个 kirara_* 逐个真派发一遍，证明「宿主接受返回值」。
+ * 把 11 个 kirara_* 逐个真派发一遍，证明「宿主接受返回值」。
  *
  * 为什么不是 contract-test.mjs：那一份依赖 `TOOL_RUNTIME_SCHEDULER` 这个导出符号，
  * 而 0.2.2-rc.1 起宿主改成了「ToolsService.setExecutor + @deepseek-ai/dsh-tool-executor-native」，
@@ -20,7 +20,7 @@
  * 退出码 0 = 全部被接受；1 = 有工具被拒。
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -74,7 +74,9 @@ console.log('  ✓ 真实 cordis Context + ToolsService + native 执行器已就
 
 const mod = await import(`${pathToFileURL(join(pluginRoot, 'lib', 'impl.js')).href}?v=${Date.now()}`);
 const workspaceRoot = process.env.DSH_WORKSPACE || dirname(pluginDir);
-ctx.plugin(mod, { workspaceRoot, buildTimeoutMs: 1200000 });
+// uiLoopDir 指到临时目录：kirara_ui 的 review 会**写**状态，
+// 落在真实仓库里就会改掉「这一轮到底看没看过」的事实（那是给 kirara_verify/summary 读的）。
+ctx.plugin(mod, { workspaceRoot, buildTimeoutMs: 1200000, uiLoopDir: join(tmpdir(), 'kirara-ui-loop-dispatch') });
 await new Promise((r) => setTimeout(r, 60));
 
 let failures = 0;
@@ -127,6 +129,11 @@ const cases = [
   }],
   ['kirara_summary', { feature: '宿主派发回归', mode: 'full', changes: ['lib/impl.js'] }],
   ['kirara_release_notes', { project: 'media' }],
+  // 实时视觉环的三个分支：plan（MCP 发现 + 设备探测，最长）、status（只读）、review（会写状态）。
+  // shot 不在这里派发：抓图要真设备，采纳路径的写盘行为由 cache-budget 的临时工作区覆盖。
+  ['kirara_ui', { action: 'plan', platform: 'ios' }],
+  ['kirara_ui', { action: 'status' }],
+  ['kirara_ui', { action: 'review', platform: 'ios', issues: ['详情页卡片圆角 18 → 14'] }],
 ];
 
 console.log(`\n=== 真宿主派发 ${cases.length} 次（含 iOS 分支）===`);

@@ -440,4 +440,77 @@ try {
   console.error((err?.stack || '').split('\n').slice(0, 8).join('\n'));
 }
 
+console.log('\n=== 10. kirara_ui 与流程接线（MCP 视觉环 / 未闭环不许宣称完成） ===');
+{
+  // 用独立的工作区 + 独立证据目录：这个工具会写状态，跑在真实仓库上会改掉真实结论。
+  const tmp = mkdtempSync(join(tmpdir(), 'kirara-ui-selftest-'));
+  try {
+    const mediaDir = join(tmp, 'Kirara_Media');
+    mkdirSync(join(mediaDir, 'iosApp', '.tmp'), { recursive: true });
+    const shot = join(tmp, 'shot.png');
+    writeFileSync(shot, Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'));
+
+    const local = new Map();
+    mod.apply(
+      { tools: { register: (tool) => { local.set(tool.name, tool); return () => local.delete(tool.name); } } },
+      { ...config, workspaceRoot: tmp, uiLoopDir: join(tmp, 'loop'), uiLoopTimeoutMs: 15000 },
+    );
+    const view = async (name, args) => {
+      const t = local.get(name);
+      const value = await t.execute(args, { agent: null });
+      return { value, text: (t.output.render ? t.output.render(args, value) : []).map((b) => b.text ?? '').join('') };
+    };
+    console.log('  本地注册工具数 =', local.size, '（应 11）');
+
+    // (a) plan：任何一端都要能给出「怎么转」；没设备也要说清楚缺什么
+    const plan = await view('kirara_ui', { action: 'plan', platform: 'ios' });
+    console.log('  [a] plan -> ok =', plan.value.ok, '| 设备行 =', (plan.value.device || '(空)').slice(0, 48));
+    console.log('      含兜底桥说明 =', /simctl|adb/.test(plan.text), '| 含 review 收敛步 =', /review/.test(plan.text));
+
+    // (b) 采纳截图 + 两轮 review：闭环判据必须靠事实而不是自述
+    const adopt = await view('kirara_ui', { action: 'shot', platform: 'ios', paths: [shot], note: 'selftest' });
+    console.log('  [b] shot 采纳 ->', adopt.value.shots.map((s) => s.split('/').pop()).join(', ') || '(无)');
+    const open = await view('kirara_ui', { action: 'review', platform: 'ios', issues: ['圆角 18 → 14'] });
+    console.log('      带 issues -> closed =', open.value.closed, '| 未修 =', open.value.openIssues);
+
+    // (c) 未闭环时：路线要点到视觉环，verify 要开口，summary 要把它记成风险
+    const start = await view('kirara_start', { request: '调整 iOS 登录页按钮的间距和配色' });
+    console.log('  [c] start 路线含 kirara_ui =', start.value.steps.some((s) => /kirara_ui/.test(s)));
+
+    const verifyOpen = await view('kirara_verify', { summary: '登录页按钮间距', project: 'media', mode: 'full', purpose: 'ui-design' });
+    console.log('      verify 无截图 -> 有 needScreenshots =', Boolean(verifyOpen.value.needScreenshots),
+      '| 指到 kirara_ui =', /kirara_ui/.test(verifyOpen.value.needScreenshots || ''));
+    console.log('      verify 未闭环 -> 步骤里点了名 =',
+      verifyOpen.value.steps.some((s) => /视觉环未闭环/.test(s.action)));
+
+    const summaryOpen = await view('kirara_summary', {
+      feature: '登录页按钮间距与配色调整', mode: 'full', changes: ['shared/src/commonMain/.../LoginScreen.kt'], builds: ['media: ok'],
+    });
+    console.log('      summary 未闭环 -> 风险里点了名 =', /视觉环未闭环/.test(summaryOpen.value.markdown));
+
+    // (d) 清空未修项 → 闭环；此后 verify 不再追问、summary 不再记风险
+    const done = await view('kirara_ui', { action: 'review', platform: 'ios' });
+    console.log('  [d] 清空 -> closed =', done.value.closed, '| 迭代 =', done.value.iterations);
+    const verifyDone = await view('kirara_verify', { summary: '登录页按钮间距', project: 'media', mode: 'full', purpose: 'ui-design' });
+    console.log('      verify 已闭环 -> 不再点名 =', !verifyDone.value.steps.some((s) => /视觉环未闭环/.test(s.action)));
+    const summaryDone = await view('kirara_summary', {
+      feature: '登录页按钮间距与配色调整', mode: 'full', changes: ['shared/src/commonMain/.../LoginScreen.kt'], builds: ['media: ok'],
+    });
+    console.log('      summary 已闭环 -> 不再记风险 =', !/视觉环未闭环/.test(summaryDone.value.markdown));
+
+    // (d) 配置里给了 MCP 命令时才会去注册；没给就什么都不做（不静默装东西）
+    const injected = [];
+    mod.apply(
+      {
+        tools: { register: () => () => {} },
+        inject: (deps, cb) => { injected.push(deps.join(',')); cb({ mcpManager: { register: () => () => {} }, effect: (fn) => { fn(); } }); },
+      },
+      { ...config, workspaceRoot: tmp, uiMcpServer: 'android', uiMcpCommand: '/opt/nope/adb-mcp', uiMcpArgs: '--sdk /tmp/sdk' },
+    );
+    console.log('  [d] 配了 uiMcp* -> 走了 inject([...]) =', injected.includes('mcpManager'));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 console.log('\n=== 全部工具执行完毕，插件自检通过 ===');

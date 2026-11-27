@@ -11,7 +11,7 @@
  * 这个脚本做四件事：
  *   1. 用宿主安装目录那一份 `dsh-tools`（经模块拦截钩子，语义等同 app-boot 的
  *      `routeScoped`）构造**真实** cordis `Context` + **真实** `ToolRuntime`；
- *   2. 把插件 `apply()` 挂上去，逐个 `prepare()` 十个工具，证明调度器存在且可派发；
+ *   2. 把插件 `apply()` 挂上去，逐个 `prepare()` 十一个工具，证明调度器存在且可派发；
  *   3. 对 `kirara_profile` 跑完整 `prepare → dispatch → finish`，证明结果真的产出；
  *   4. 断言「宿主作用域内不存在第二个物理副本」（模块身份唯一）。
  *
@@ -129,7 +129,7 @@ function lookup(name) {
   return undefined;
 }
 
-const TOOL_NAMES = ['kirara_start', 'kirara_profile', 'kirara_docs', 'kirara_route', 'kirara_build', 'kirara_verify', 'kirara_summary', 'kirara_docsync', 'kirara_release_notes', 'kirara_release'];
+const TOOL_NAMES = ['kirara_start', 'kirara_profile', 'kirara_docs', 'kirara_route', 'kirara_build', 'kirara_verify', 'kirara_summary', 'kirara_docsync', 'kirara_release_notes', 'kirara_release', 'kirara_ui'];
 const definitions = new Map();
 for (const name of TOOL_NAMES) {
   const def = lookup(name);
@@ -236,7 +236,7 @@ try {
 // 为什么之前没抓到：§6 只对 kirara_profile 跑了完整 dispatch，而 kirara_profile 的返回值
 // 恰好干净。夹具此前只检查 `prepare()` 的形状，从不检查**返回值**。
 // 这一节把 8 个工具全部真派发一次（临时空 root，毫秒级），外加 kirara_build 的两种退出码。
-console.log('\n=== 6.5 工具返回值 lossless JSON 边界（10 个工具真派发） ===');
+console.log('\n=== 6.5 工具返回值 lossless JSON 边界（11 个工具真派发） ===');
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
 const { tmpdir } = await import('node:os');
 const { isJsonValue, snapshotJsonValue } = await import(pathToFileURL(join(hostRoot, '@deepseek-ai', 'dsh-util-values', 'lib', 'index.js')).href);
