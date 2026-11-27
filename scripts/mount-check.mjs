@@ -27,7 +27,9 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginDir = dirname(here);
 const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
-const profileDir = join(dshHome, 'profiles', process.env.DSH_PROFILE || 'desktop');
+// ⚠️ profile 目录名不一定等于 `desktop`（本机是 desktop-017）：优先用宿主导出的
+// DSH_PROFILE_DIR，与 deploy.mjs / host-dispatch.mjs 保持同一套解析。
+const profileDir = process.env.DSH_PROFILE_DIR || join(dshHome, 'profiles', process.env.DSH_PROFILE || 'desktop');
 const profileNodeModules = join(profileDir, 'node_modules');
 const deployedDir = join(profileNodeModules, '@kirara', 'dsh-plugin-kirara-dev');
 
