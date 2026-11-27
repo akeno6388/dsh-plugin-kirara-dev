@@ -124,7 +124,7 @@ node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 4) 真宿主派�
 
 ## 自检夹具
 
-按「抓哪一类失败面」分工，四条主力 + 若干专项：
+按「抓哪一类失败面」分工，五条主力 + 若干专项：
 
 | 脚本 | 覆盖的失败面 | 是否走宿主真实代码 |
 | --- | --- | --- |
@@ -132,8 +132,9 @@ node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 4) 真宿主派�
 | `deploy.mjs` | **部署形态**：profile 副本 == 源码、profile 里无宿主包副本 | ✗ 只做文件/清单断言 |
 | `mount-check.mjs` | **解析归层**：复现 `routeScoped` 的两锚点判定 + 清单形态 | ✗ 模拟判定 |
 | `contract-test.mjs` | **真实调度链路**：真 `cordis.Context` + 真 `ToolRuntime`，逐个 `prepare()`。⚠️ **本机宿主上已整段失效** —— 它查的 `TOOL_RUNTIME_SCHEDULER` 从 0.2.2-rc.1 起不再导出，见 [事故六](troubleshooting.md) | ✓ 全真（但取执行器的方式过期） |
-| `host-dispatch.mjs` | **真宿主派发**（顶 `contract-test` 的位置）：真 `Context` + `ToolsService` + `@deepseek-ai/dsh-tool-executor-native`，把 11 个工具挨个派发，含 iOS 分支（`target=ios` 的 `macCommands`、media 的 iOS 验证清单、`profile` 的 `ios` 块）与分章文档的 `map` / `section` / 章节插入计划分支，以及 `kirara_ui` 的 plan/status/review 三个分支 | ✓ 全真（**现行** API） |
+| `host-dispatch.mjs` | **真宿主派发**（顶 `contract-test` 的位置）：真 `Context` + `ToolsService` + `@deepseek-ai/dsh-tool-executor-native`，把 11 个工具挨个派发，含 iOS 分支（`target=ios` 的 `macCommands`、media 的 iOS 验证清单、`profile` 的 `ios` 块）与分章文档的 `map` / `section` / 章节插入计划分支，`kirara_start` 的 `detail=full` / `detail=route` 两条返回形状，`kirara_handoff` 的 open / close 两条路（`handoffDir` 指到临时目录，不写真实工作区），以及 `kirara_ui` 的 plan/status/review 三个分支 | ✓ 全真（**现行** API） |
 | `doc-layer-test.mjs` | **分章文档层**：临时工作区造「单卷 99」与「多卷 99」两种形态，断言发现规则、map/search/section、frontmatter.files 选章、既有/新增小节、BUG 修复不新开小节、历史编号 +1、00 索引提示、结构审计 | ✗ 假 `ctx.tools` |
+| `handoff-test.mjs` | **外部交接**：临时工作区造一个「够真」的 `Kirara_Media`，断言 brief 九节齐全且都有正文、含构建命令与 `SAFETY_RULES`、`inline` 两条返回预算、回执的两种形态（裸 JSON / ```json 围栏）、缺必填项拒收且不写 `report.json`、缺失截图点名、`runId` 路径穿越被拒、连续 `open` 不覆盖 | ✗ 假 `ctx.tools` |
 | `cache-budget.mjs` | **前缀缓存预算**：工具目录逐字节稳定 + 描述无易变内容 + 每个工具的返回值不超预算 + `kirara_ui` 的环语义（采纳截图编号、未修项不算闭环、零截图不算闭环） | ✗ 假 `ctx.tools`（含一次假 `gradlew` / `gradlew.bat` 真派发） |
 | `contract-test.mjs` 的 §6.5 | **可选键边界**：`artifact` / `screenshotReview` / `needScreenshots` 三类条件展开键，以及 `mode=docs` 的短路分支 | ✓ 全真 |
 | `contract-test.mjs` 的 §6.7 | **发布链路端到端**：临时仓库 + 假发布脚本，但真找产物、真改名、真搬目录、真算 SHA256、真写 `.sha256`；以及 README 门禁的拦下 / `force` 放行 / 提交后自动放行三段行为 | ✓ 全真 |
@@ -142,7 +143,8 @@ node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 4) 真宿主派�
 node scripts\deploy.mjs          # 部署最新源码到 profile + 校验不变量
 node scripts\selftest.mjs        # 工具级自检
 node scripts\doc-layer-test.mjs  # 分章文档层回归（发现 / map / search / section / 选章 / 插入计划 / 审计）
-node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 真宿主派发（含 iOS 与分章分支）
+node scripts\handoff-test.mjs    # 外部交接回归（brief 九节 / 预算 / 回执校验 / 路径穿越）
+node scripts\host-dispatch.mjs --host <宿主 node_modules>   # 真宿主派发（含 iOS、detail=route 与 handoff）
 node scripts\mount-check.mjs     # 挂载路径检查（内部会串 contract-test.mjs）
 node scripts\contract-test.mjs   # 真实契约测试（本机宿主上已失效，见事故六）
 node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 输出预算后必跑）
@@ -160,7 +162,7 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
 
 | 常量 | 值 | 实测 | 说明 |
 | --- | --- | --- | --- |
-| `toolSchemaBytes` | 12000 | 11553（11 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565；media 双端 +402；2026-11 分章文档层 +903；同月实时视觉环 `kirara_ui` +1397。还剩 447 字节余量 —— 想再往 description 里加字，先确认值不值一次前缀抖动 |
+| `toolSchemaBytes` | 12000 | 11955（11 个工具） | 8 个工具时 6496；`kirara_release` + `kirara_release_notes` 带来 +2565；media 双端 +402；2026-11 分章文档层 +903；同月实时视觉环 `kirara_ui` +1397；交接那一轮 −620（删 `kirara_route`）+133（`kirara_start` 的 `detail`）+889（`kirara_handoff`）。**只剩 45 字节余量** —— 想再往 description 里加字，先确认值不值一次前缀抖动，并且同一轮里删掉等量字数 |
 | `docsRenderChars` | 4400 | 3869（search）/ 3817（section）/ 1645（map） | 宽泛关键词 + `maxHits=40`；section 的正文上限是 `docsBudgetChars − 300` |
 | `buildRenderChars` | 5600 | 5197 | 200 行 × 400 字符的假构建日志 |
 | `startRenderChars` | 1400 | 1302 | 长需求 + `auto`（含 UI + 文档同步两条额外步骤）。iOS 那条步骤只在命中 `IOS_SIGNALS` 时出现，本用例不计入 |
@@ -187,16 +189,16 @@ node scripts\cache-budget.mjs    # 前缀缓存预算回归（改 description / 
   ✓ TOOL_RUNTIME_SCHEDULER 可解析且带 prepare()
 === 3. 加载插件并 apply() ===
   ✓ apply(ctx, config) 未抛异常
-  ✓ 真实 ToolRuntime 里找到全部 10 个 kirara_* 定义
+  ✓ 真实 ToolRuntime 里找到全部 11 个 kirara_* 定义
 === 4. 真实调度器 prepare()（每个工具） ===
   ✓ kirara_start: prepare → dispatch      arguments = {"request":"…"}
   ✓ kirara_profile: prepare → dispatch    arguments = {}
   …
 === 5. presentCall() 视图形状 ===
-  ✓ 十个全部 card=generic / title 非空 / kind ∈ ToolCallKind
+  ✓ 十一个全部 card=generic / title 非空 / kind ∈ ToolCallKind
 === 6. 完整链路 prepare → dispatch → finish（kirara_profile） ===
   ✓ 工具体执行成功（isError 非 true）
-=== 6.5 工具返回值 lossless JSON 边界（10 个工具真派发） ===
+=== 6.5 工具返回值 lossless JSON 边界（11 个工具真派发） ===
   ✓ 返回值可被宿主接受
   ✓ kirara_build 构建成功但无 APK: 返回值为 lossless JSON    exit=0、无产物 ⇒ artifact 必须省略而不是 undefined
   ✓ kirara_verify full 无截图（screenshotReview 必须整体省略）: 通过

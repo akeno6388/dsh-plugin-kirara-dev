@@ -52,6 +52,14 @@ const WORKSPACE_ROOT = fileURLToPath(new URL('../..', import.meta.url)).replace(
  *     的描述。为什么值：原来 UI 改动的反馈周期是「改代码 → 全量自检脚本(约 4 分钟) → 4 张固定
  *     截图 → 返工」，一次样式返工就是十几分钟；现在内环是「截一张图 → 看图 → 改」，秒级。
  *     卡在 12000：这一轮把「反馈周期」而不是「更多文档」换成了前缀成本，增量是可控的一次性投入。
+ *   2026-11 第六轮（外部强模型交接 kirara_handoff，删除 kirara_route）：11 个工具 **11955 字节**。
+ *     账目：−620（kirara_route 整个工具）+133（kirara_start 的 detail 参数与其分支）
+ *     +889（kirara_handoff），合计 +402。也就是说这一轮**几乎吃满了**第五轮留下的余量：
+ *     让出的 620 字节远小于「交接包」这个新能力需要的 889 字节，差额由 start 上合并掉的
+ *     路由入口（detail=route）与更短的描述补上。为什么仍值：交接包换掉的是「DSH 自己把
+ *     改代码 / 跑构建 / 视觉迭代全做完」这条长链，代价是每次请求多带一份 889 字节的描述。
+ *     ⚠️ 现在只剩 45 字节余量：再往工具目录里加东西，必须先在同一轮里**删掉**别的字数
+ *     （而不是把 toolSchemaBytes 基线往上抬 —— 那等于用常驻前缀换临时方便）。
  */
 const BUDGET = {
   /** 11 个工具的 name+description+parameters JSON 总字节上限。 */
@@ -92,6 +100,18 @@ const BUDGET = {
   releaseNotesHardCap: 3200,
   /** kirara_release 的硬预算。 */
   releaseHardCap: 3000,
+  /**
+   * kirara_handoff(open) 默认返回正文的上限 = textBudgetChars（2400）。
+   * 默认只回「路径 + 可直接粘贴的 prompt」；brief 正文只有 inline=true 才带 ——
+   * 否则一次 open 就会把 4–6 KB 的交接包灌进上下文。
+   */
+  handoffRenderChars: 2400,
+  /**
+   * kirara_handoff(open, inline=true) 的上限 = handoffBudgetChars（6000）。
+   * 这条是**硬承诺**：插件侧用 clampTextHard() 把截断提示也计入预算，
+   * 所以这里可以直接卡 6000 而不是「6000 + 提示」。
+   */
+  handoffInlineChars: 6000,
 };
 
 /** 不应出现在 description/parameters 里的「每台机器/每次启动都不一样」的东西。 */
@@ -163,7 +183,7 @@ const firstLive = run1.live;
 const names = [...first.keys()].sort();
 console.log(`  已注册 ${names.length} 个工具：${names.join(', ')}`);
 
-const EXPECTED = ['kirara_build', 'kirara_docs', 'kirara_docsync', 'kirara_profile', 'kirara_release', 'kirara_release_notes', 'kirara_route', 'kirara_start', 'kirara_summary', 'kirara_ui', 'kirara_verify'];
+const EXPECTED = ['kirara_build', 'kirara_docs', 'kirara_docsync', 'kirara_handoff', 'kirara_profile', 'kirara_release', 'kirara_release_notes', 'kirara_start', 'kirara_summary', 'kirara_ui', 'kirara_verify'];
 const missing = EXPECTED.filter((n) => !first.has(n));
 const extra = names.filter((n) => !EXPECTED.includes(n));
 if (missing.length || extra.length) {
@@ -261,7 +281,9 @@ const checks = [
     BUDGET.docsyncRenderChars,
   ],
   ['kirara_profile（三端全量）', 'kirara_profile', {}, 1200],
-  ['kirara_route（full + 阻塞）', 'kirara_route', { request: '删除旧的评论表并重构为分表存储，需要改表结构', mode: 'full' }, 1500],
+  // 原 kirara_route 的用例改挂到 kirara_start(detail=route)：这是同一条返回分支
+  // （路线 + 待拍板项，最长的一条是「破坏性改动 ⇒ 阻塞」）。
+  ['kirara_start（detail=route + 阻塞）', 'kirara_start', { request: '删除旧的评论表并重构为分表存储，需要改表结构', mode: 'full', detail: 'route' }, 1500],
   ['kirara_summary', 'kirara_summary', { feature: 'x', mode: 'full', changes: ['a', 'b'], builds: ['c'], risks: ['d'] }, 800],
   // 发布链路：notes 取最大区间（后端没有版本 tag ⇒ 退回首个提交，桶最多），release 走 dryRun 计划。
   ['kirara_release_notes（api，无 tag ⇒ 区间最大）', 'kirara_release_notes', { project: 'api' }, BUDGET.releaseNotesRenderChars],
@@ -291,8 +313,11 @@ console.log('\n=== 4. 叙述型工具的硬预算（异常大入参也不许灌�
   // 所以不能共用 narrativeHardCap 那一把尺子。
   const cases = [
     ['kirara_summary', { feature: 'x'.repeat(500), mode: 'full', changes: huge, builds: huge, risks: huge }, BUDGET.narrativeHardCap],
-    ['kirara_route', { request: 'x'.repeat(4000), mode: 'full' }, BUDGET.narrativeHardCap],
+    // 原 kirara_route 的这条改挂 detail=route：超长需求在「只出路线」这条分支上同样要被收口。
+    // 注意 §4 的元组第一项是**工具名**（不是标签），所以这里两行都叫 kirara_start。
+    ['kirara_start', { request: 'x'.repeat(4000), mode: 'full', detail: 'route' }, BUDGET.narrativeHardCap],
     ['kirara_start', { request: 'x'.repeat(4000), mode: 'full' }, BUDGET.narrativeHardCap],
+    // kirara_handoff 的超大入参用例放在 §8：它要写盘，必须跑在临时工作区里。
     ['kirara_verify', { summary: 'x'.repeat(4000), project: 'desktop', mode: 'full' }, BUDGET.narrativeHardCap],
     ['kirara_docsync', { feature: 'x'.repeat(4000), changes: huge }, BUDGET.narrativeHardCap],
     // 版本号是这两个工具唯一能塞进超长自由文本的地方（其余入参都有 enum / 短语义）。
@@ -483,6 +508,83 @@ console.log('\n=== 7. kirara_ui 实时视觉环（临时工作区，不碰真实
       bad(`kirara_ui（review 超大 issues）: render ${heavy.text.length} 字符超出预算 ${BUDGET.uiRenderChars}`);
     } else {
       ok(`kirara_ui（review 超大 issues）: ${heavy.text.length} ≤ ${BUDGET.uiRenderChars} 字符`);
+    }
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+}
+
+console.log('\n=== 8. kirara_handoff 的返回值预算（临时工作区，不碰真实仓库） ===');
+{
+  // 这个工具会**写盘**（brief / report），所以必须换一个临时根 + 临时 handoffDir；
+  // 在真实工作区跑会在三端仓库旁边留下 .kirara-dev/handoff。
+  const tmp = await mkdtemp(join(tmpdir(), 'kirara-handoff-budget-'));
+  try {
+    const run = await register(tmp, { handoffDir: join(tmp, 'handoff') });
+    const open = await exec(run.live, 'kirara_handoff', { action: 'open', request: '给安卓端设置页加一个暗色模式开关' });
+    if (open.text.length > BUDGET.handoffRenderChars) {
+      bad(`kirara_handoff(open): render ${open.text.length} 字符超出预算 ${BUDGET.handoffRenderChars}`);
+    } else {
+      ok(`kirara_handoff(open): ${open.text.length} ≤ ${BUDGET.handoffRenderChars} 字符`, `runId=${open.value.runId}`);
+    }
+    if (open.value.ok !== true || !open.value.briefPath) {
+      bad('kirara_handoff(open): 没有回出 briefPath', JSON.stringify(open.value).slice(0, 200));
+    } else {
+      ok('kirara_handoff(open): 返回路径与 prompt', `${open.value.prompt.length} 字符的粘贴块`);
+    }
+
+    const inline = await exec(run.live, 'kirara_handoff', { action: 'open', request: '给安卓端设置页加一个暗色模式开关', inline: true });
+    if (inline.text.length > BUDGET.handoffInlineChars) {
+      bad(`kirara_handoff(open, inline): render ${inline.text.length} 字符超出预算 ${BUDGET.handoffInlineChars}`);
+    } else {
+      ok(`kirara_handoff(open, inline): ${inline.text.length} ≤ ${BUDGET.handoffInlineChars} 字符`);
+    }
+
+    // 超大需求 + inline=false：prompt 会带上需求原文，这条路径也要被 2400 收口。
+    const hugeOpen = await exec(run.live, 'kirara_handoff', { action: 'open', request: 'x'.repeat(4000) });
+    if (hugeOpen.text.length > BUDGET.handoffRenderChars) {
+      bad(`kirara_handoff(open, 超大需求): render ${hugeOpen.text.length} 字符超出 ${BUDGET.handoffRenderChars}`);
+    } else {
+      ok(`kirara_handoff(open, 超大需求): ${hugeOpen.text.length} ≤ ${BUDGET.handoffRenderChars} 字符`);
+    }
+
+    // 超大需求 + inline：截断提示必须随正文一起待在预算里（clampTextHard 的硬承诺）。
+    const huge = await exec(run.live, 'kirara_handoff', { action: 'open', request: 'x'.repeat(4000), inline: true });
+    if (huge.text.length > BUDGET.handoffInlineChars) {
+      bad(`kirara_handoff(inline, 超大需求): render ${huge.text.length} 字符超出 ${BUDGET.handoffInlineChars}`);
+    } else {
+      ok(`kirara_handoff(inline, 超大需求): ${huge.text.length} ≤ ${BUDGET.handoffInlineChars} 字符`);
+    }
+
+    // close：回执是外部输入，渲染同样有预算；缺必填项时必须是 ok=false 且不写 report.json。
+    const report = JSON.stringify({
+      status: 'done',
+      summary: '加了暗色开关',
+      changed: [{ file: 'Kirara_Media/app/src/main/java/com/akeno/kirara/SettingsScreen.kt', why: '加开关' }],
+      commands: [{ cmd: 'gradlew.bat assembleDebug', exit: 0, note: '48s' }],
+      verification: { build: 'ok', uiLoop: 'closed', acceptance: [{ item: '开关可切换', result: 'pass', evidence: 'shot-01.png' }] },
+      docsHint: ['技术栈文档「设置页」一节要更新'],
+    });
+    const close = await exec(run.live, 'kirara_handoff', { action: 'close', runId: open.value.runId, report });
+    if (close.text.length > BUDGET.handoffRenderChars) {
+      bad(`kirara_handoff(close): render ${close.text.length} 字符超出预算 ${BUDGET.handoffRenderChars}`);
+    } else {
+      ok(`kirara_handoff(close): ${close.text.length} ≤ ${BUDGET.handoffRenderChars} 字符`);
+    }
+    if (close.value.ok !== true || close.value.status !== 'done') {
+      bad('kirara_handoff(close): 合法回执被拒', JSON.stringify(close.value).slice(0, 200));
+    } else {
+      ok('kirara_handoff(close): 合法回执被接受', `changed=${close.value.changed.join(', ')}`);
+    }
+    const reject = await exec(run.live, 'kirara_handoff', {
+      action: 'close',
+      runId: open.value.runId,
+      report: JSON.stringify({ summary: '没说状态' }),
+    });
+    if (reject.value.ok !== false) {
+      bad('kirara_handoff(close): 缺 status 的回执没有被拒（会让文档同步拿到半份事实）');
+    } else {
+      ok('kirara_handoff(close): 缺 status 被拒', reject.value.missing?.join(' / ') || reject.value.error);
     }
   } finally {
     await rm(tmp, { recursive: true, force: true });

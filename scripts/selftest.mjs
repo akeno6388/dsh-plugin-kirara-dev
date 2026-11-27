@@ -186,31 +186,35 @@ console.log('\n=== 2. kirara_docs ===');
   for (const h of value.hits.slice(0, 5)) console.log(`   ${h.file}:${h.line} [${h.section}] ${h.text.slice(0, 90)}`);
 }
 
-console.log('\n=== 3. kirara_route (small，一句话小功能) ===');
+console.log('\n=== 3. kirara_start(detail=route) (small，一句话小功能) ===');
 {
-  const { value } = await call('kirara_route', { request: '给安卓端设置页加一个深色模式切换开关', mode: 'small' });
+  const { value } = await call('kirara_start', { request: '给安卓端设置页加一个深色模式切换开关', mode: 'small', detail: 'route' });
   console.log('mode =', value.mode, ' requiresDeviceVerification =', value.requiresDeviceVerification);
   console.log('targets =', value.targets.map((t) => t.key).join(', '));
   console.log('decisions =', value.decisions.length);
   console.log('nextStep =', value.nextStep);
 }
 
-console.log('\n=== 4. kirara_route (full，破坏性改动 → 应挂起) ===');
+console.log('\n=== 4. kirara_start(detail=route) (full，破坏性改动 → 应挂起) ===');
 {
-  const { value } = await call('kirara_route', {
+  const { value } = await call('kirara_start', {
     request: '删除旧的评论表并重构为分表存储，需要改表结构',
     mode: 'full',
+    detail: 'route',
   });
   console.log('targets =', value.targets.map((t) => t.key).join(', '));
   console.log('decisions =', value.decisions.map((d) => `${d.id}(blocking=${d.blocking})`).join(', '));
   console.log('nextStep =', value.nextStep);
 }
 
-console.log('\n=== 4.5 kirara_route (docs，纯文档变更) ===');
+console.log('\n=== 4.5 kirara_start(detail=route) (docs，纯文档变更) ===');
 {
-  const { value } = await call('kirara_route', { request: '同步一下文档', mode: 'docs' });
+  const { value } = await call('kirara_start', { request: '同步一下文档', mode: 'docs', detail: 'route' });
   console.log('mode =', value.mode, '| 实机验证 =', value.requiresDeviceVerification, '| 计划 =', value.plan.length);
   console.log('nextStep =', value.nextStep);
+  // detail=route 不接受 auto：缺 mode 时必须回 STOP，而不是偷偷替调用方猜一个
+  const noMode = await call('kirara_start', { request: '同步一下文档', detail: 'route' });
+  console.log('缺 mode -> plan =', noMode.value.plan.length, '| nextStep =', noMode.value.nextStep.slice(0, 40));
 }
 
 console.log('\n=== 5. kirara_verify (small/docs 应跳过 / full 应给清单) ===');

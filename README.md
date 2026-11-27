@@ -6,8 +6,9 @@
 > Kirara Dev Flow — route a request to the right projects, search the docs, run the real build,
 > then hand over a device-acceptance checklist.
 
-装好之后模型手里会多出十个 `kirara_*` 工具，覆盖「读文档 → 定路线 → 改代码 → 跑构建 → 出验收清单 →
-同步文档 → 发布 → 收尾」这整条链路。它主要解决四件事：
+装好之后模型手里会多出十一个 `kirara_*` 工具，覆盖「读文档 → 定路线 → 改代码 → 跑构建 → 出验收清单 →
+同步文档 → 发布 → 收尾」这整条链路，外加一条「把改代码与视觉迭代交给外部强模型」的交接链路。
+它主要解决五件事：
 
 - **文档太大，不能整篇读**。单篇技术文档最大 258 KB，整篇塞进上下文会把它挤爆。
   插件改成按关键词检索，只取需要的片段。
@@ -19,15 +20,19 @@
 - **发布是拼命令，而且出错之后改不回来**。三端的打包脚本、版本号来源、产物命名、校验码格式各不相同，
   还要在发出去之前把新增功能写进给用户看的 README。`kirara_release` 把这些固化成工具：
   产物统一按 `_v<版本>` 命名搬到桌面、生成 `sha256sum` 格式的校验文件、README 没跟上就直接拦下。
+- **改代码也可以交给外部强模型，但事实不能靠聊天记录转述**。同一个需求在两次转述之间会走形，
+  而「改代码 + 跑构建 + 用 MCP 盯着界面改」这一段本来就该由拿得到 MCP 的那个智能体做。
+  `kirara_handoff` 把需求、边界、约束、文档线索、验收标准与回执契约落成一份文件，
+  外部模型干完再回一份结构化回执 —— 两边只交换文件，不交换回忆。
 
 ## 功能
 
 | 工具 | 说明 |
 | --- | --- |
-| `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题。`mode=auto` 会在 `docs` / `full` / `small` 之间判定 |
+| `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题。`mode=auto` 会在 `docs` / `full` / `small` 之间判定；`detail=route` 只出路线（原 `kirara_route`，此时 `mode` 必须显式给） |
 | `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读那些几百 KB 的技术文档 |
 | `kirara_docs` | **分章文档检索**。`mode=map` 先看章节地图（章 / 小节 / 显式锚点 / 结构审计），`mode=search` 按关键词返回 `文件:行号` + 所属章/节/锚点，`mode=section` 用 `03.2` 或 `#auth` 只读单节 |
-| `kirara_route` | 把一句话需求展开成路线：涉及端、执行步骤、决策点 |
+| `kirara_handoff` | **外部强模型交接**。`action=open` 落下 brief（九节）/ `prompt.md` / `shots/` 并给出可粘贴的 prompt；`action=close` 校验外部回执、写 `report.md` + `report.json`，回出 `changed[]` 喂给 `kirara_docsync`。不发网络请求、不轮询、不执行回执里的任何字符串 |
 | `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部。media 是双端，`target` 可选 `android` / `ios-klib` / `ios-framework` / `ios`（`ios` 会跑模拟器自检并直接产出 UI 截图） |
 | `kirara_verify` | 产出分步的真机验收清单（步骤 + 预期结果）；传入截图路径可以额外拿到一段视觉复核协议，`purpose=ui-design` 时给的是「该怎么改」的 P0/P1 修改建议 |
 | `kirara_docsync` | **文档同步**。自行判断本轮改动属于新功能 / BUG 修复 / 界面改动 / 纯内部整理，按 `frontmatter.files` + 标题关键词选章、选节，产出**插入位置**（改哪节，或在第几行新增 `## NN.M` + 锚点）、frontmatter 补文件、99 变更记录条目与写作规范 |
@@ -313,7 +318,7 @@ JDK 位置）与九条「静默失败」的坑点见
 | Inno Setup 6（`ISCC.exe`） | desktop 的发布脚本编译安装包 |
 | `Kirara_Media/keystore.properties` | media 的 release 签名。缺失时发布会被签名前置检查拦下 |
 
-只装插件、不备工具链也能用 `kirara_start` / `kirara_docs` / `kirara_route` / `kirara_docsync` 做路由、检索与文档同步。
+只装插件、不备工具链也能用 `kirara_start` / `kirara_docs` / `kirara_docsync` / `kirara_handoff` 做路由、检索、文档同步与外部交接。
 
 ## 安装
 
@@ -545,6 +550,61 @@ Android 侧要同样的能力，需要一台跑得起来的设备（真机开 US
 没配就什么都不做（本机没有 npm/npx，自动下载第三方服务器不是插件的职责）。
 即便不配 MCP，Android 的截图与 `adb shell input tap` 也照常可用。
 
+### 与外部强模型交接（`kirara_handoff`）
+
+分工可以是这样的：**DSH 负责「读懂 + 定路线 + 检索文档 + 收回执 + 同步文档 + 发版」，
+外部强模型（带 MCP 的编码智能体）负责「改代码 + 跑构建 + 用 MCP 实时看界面 + 自验收」**。
+
+问题是这两者不共享上下文：把需求用聊天记录转述过去，第二次转述就和第一次不一样了；
+把「哪些端、什么约束、读过哪几段文档、怎么算验收通过」也靠嘴说，等于让外部模型猜。
+所以 `kirara_handoff` 把这段交接**落成文件**：
+
+```text
+<workspaceRoot>/.kirara-dev/handoff/KH-20261127-1807/
+├── brief.md      # 九节交接包（人读）：任务卡 / 边界 / 涉及端 / 必读事实 / 文档线索 /
+│                 #   文档片段 / 验收标准 / MCP 用法 / 回执格式
+├── brief.json    # 机读的同一份（含 targets / docHits / safety / checklist）
+├── prompt.md     # 可直接粘贴给外部模型的那段话（约 900 字）
+├── shots/        # 外部模型的截图写这里 —— 两边都能看到的唯一证据目录
+├── report.md     # close 时写入（回执原文）
+├── report.json   # close 时写入（解析 + 校验后的结构）
+└── README.txt    # 一行说明：这是 DSH 与外部模型之间的交接目录
+```
+
+一次完整交互长这样：
+
+```js
+// ① DSH 侧：产出交接包（inline=false 时只回路径 + 可粘贴的 prompt，≤ 2400 字符）
+kirara_handoff({ action: 'open', request: '设置页加暗色开关' })
+// → { runId: 'KH-20261127-1807', dir, briefPath, promptPath, prompt, mode: 'full',
+//     targets: [...], checklist: [...], safety: [...] }
+
+// ② 人把 prompt.md（或返回值里的粘贴块）交给外部模型；
+//    它读 brief.md → 改代码 → 跑构建 → 截图进 shots/ → 按第 9 节的 JSON 模板回执
+
+// ③ DSH 侧：收回执。缺 status / summary / changed 会被拒收且**不写** report.json
+kirara_handoff({ action: 'close', runId: 'KH-20261127-1807', report: '<外部回执原文>' })
+// → { status: 'done', summary, changed: ['Kirara_Media/.../SettingsScreen.kt'],
+//     commands, screenshots, verification, docsHint, openIssues, nextStep }
+
+// ④ 回执里的 changed 直接喂文档同步，再写、再总结
+kirara_docsync({ feature: '设置页加暗色开关', changes: ['Kirara_Media/.../SettingsScreen.kt'] })
+kirara_summary({ feature: '设置页加暗色开关', mode: 'full', changes: [...] })
+```
+
+四条边界是刻意划的：
+
+- **不管理外部模型。** 插件不发请求、不轮询、不做网络探测 —— 文件和人是唯一的传递通道。
+  因此不会因为「外部模型挂了」把工具调用卡住。
+- **回执是外部输入，只校验不执行。** `report` 里的任何字符串都不会被拼进命令行；
+  `screenshots[].path` 只在 `shots/` 里解析并 `stat`，指向目录外的一律标成 `outside`。
+- **拒收是明确的。** 缺 `status` / `summary` / `changed` 任意一项 ⇒ `ok:false` + 少哪一项，
+  并且不写 `report.json` —— 半份结构写下去，下一步的文档同步会把它当事实。
+- **路径不越界。** `runId` 只接受 `KH-YYYYMMDD-HHMM` 形态（同分钟连续 open 会补 `-2`），
+  resolve 后必须仍在交接目录内，`../../x` 直接被拒。
+
+细节（九节各写什么、回执契约、外部模型只回了一半怎么处理）见[外部强模型交接](docs/handoff.md)。
+
 ### 配置项
 
 在 profile 的 `cordis.patch.yml` 里按 id 覆盖：
@@ -559,7 +619,7 @@ Android 侧要同样的能力，需要一台跑得起来的设备（真机开 US
 | `docsMaxHits` | `12` | `kirara_docs` 默认返回的命中行数 |
 | `docsLineChars` | `200` | `kirara_docs` 命中行的正文字符上限 |
 | `docsBudgetChars` | `4000` | `kirara_docs` 单次返回的字符总预算（search / map / section 共用；section 的正文上限为该值 − 300） |
-| `textBudgetChars` | `2400` | 叙述型工具（start/route/profile/verify/summary）单次返回的字符总预算。原为 1600，抬高的原因是 UI 设计复核协议**要被原样执行**，截断即失效 |
+| `textBudgetChars` | `2400` | 叙述型工具（start/profile/verify/summary/handoff）单次返回的字符总预算。原为 1600，抬高的原因是 UI 设计复核协议**要被原样执行**，截断即失效 |
 | `docsyncBudgetChars` | `2400` | `kirara_docsync` 单次返回的字符总预算 |
 | `docsyncMaxTargets` | `4` | `kirara_docsync` 最多推荐几篇文档 |
 | `releaseTimeoutMs` | `2400000` | `kirara_release` 单次发布最长等待（40 分钟；Gradle release 与 `docker save` 都慢） |
@@ -575,6 +635,10 @@ Android 侧要同样的能力，需要一台跑得起来的设备（真机开 US
 | `uiMcpServer` | `''` | 可选：由插件代为注册的设备控制 MCP 的 `serverName`（工具名 = `mcp__<这个名字>__*`） |
 | `uiMcpCommand` | `''` | 可选：该 MCP 的可执行文件（绝对路径更稳：Finder 启动的 GUI 进程 PATH 与交互式 shell 不同） |
 | `uiMcpArgs` | `''` | 可选：命令行参数，空格分隔 |
+| `handoffDir` | `''` | 交接目录。留空 = `<workspaceRoot>/.kirara-dev/handoff`（两边都能写到同一个物理目录；插件**不改**用户仓库的 `.gitignore`，只在目录里放 `README.txt`） |
+| `handoffBudgetChars` | `6000` | `kirara_handoff(open, inline=true)` 返回正文的字符上限（`inline=false` 另有 2400 的硬预算） |
+| `handoffDocHits` | `5` | brief 第 6 节最多列几条文档命中 |
+| `handoffDocLineChars` | `180` | brief 第 6 节每条命中行的字符上限 |
 
 ### 前缀缓存与上下文预算（为什么输出压得这么小）
 
@@ -604,7 +668,7 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 调大这些值等于主动换取更频繁的压缩与更低命中率 —— 真要调，请同时跑
 `node scripts/cache-budget.mjs` 并同步改里面的预算基线。
 
-工具目录本身也在预算内：11 个工具的 `name+description+parameters` 合计 **11553 字节**
+工具目录本身也在预算内：11 个工具的 `name+description+parameters` 合计 **11955 字节**
 （8 个工具时是 6496；新增 `kirara_release` 与 `kirara_release_notes` 带来 +2565，是本插件迄今
 最大的一次目录增长；media 双端那次给 `kirara_build` 加 `target` 又加了 +402；2026-11 的分章文档层
 给 `kirara_docs` 加 `mode/chapter/section`、给 `kirara_docsync` 加章节/插入计划描述，合计 +903）。
@@ -614,6 +678,12 @@ DSH 的请求按「最长相同前缀」复用 provider 的缓存。这个插件
 与「文档写错位置」。2026-11 的实时视觉环（`kirara_ui`）又加了 +1397 —— 它换掉的是「改界面 →
 等 4 分钟全量自检 → 截图 → 返工」这条反馈环，一次样式返工就够抵消这份常驻成本。
 基线卡在 12000 字节（仍比一次 compaction 的代价小两个数量级）。
+
+2026-11 的第六轮是**唯一一次「加工具的同时减工具」**：删掉 `kirara_route`（−620）把能力并入
+`kirara_start(detail="route")`（+133 —— 只多了 detail 参数与两处分支），再新增 `kirara_handoff`（+889），
+净增 402 字节（−620 +133 +889）—— 所以总数仍是 11 个工具，只比上一轮多 402 字节。**这一轮之后只剩 45 字节余量**：
+再想往工具目录里加东西，必须先在同一轮里删掉等量的描述字数，而不是抬 `toolSchemaBytes` 基线
+（抬基线等于用常驻前缀换一次性的方便）。
 
 ## 兼容性
 
@@ -812,9 +882,10 @@ media 的 iOS 侧把这条约定做得更彻底：`kirara_ui` 直接截当前屏
 ## 文档
 
 - [架构与项目画像](docs/architecture.md) —— 十一个工具的实现、分章文档层、路由判定信号、文档同步规则、发布链路、`PROJECTS` 常量怎么维护
+- [外部强模型交接](docs/handoff.md) —— brief 九节各写什么、回执契约、交接目录结构、失败处理（外部模型只回了一半怎么办）
 - [分章文档写作规范](docs/doc-conventions.md) —— 目录/编号/frontmatter/锚点/插入模板/审计规则；换项目时照这份约定即可无缝接入
 - [DSH 插件契约](docs/plugin-contract.md) —— 插件要怎么写才会被 DSH 认可并加载
-- [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、四个自检夹具（含真宿主派发）
+- [本地开发](docs/local-development.md) —— 挂载到 profile、部署脚本、自检夹具（含真宿主派发）
 - [故障排查](docs/troubleshooting.md) —— 怎么判断插件加载了没，以及几个已经踩过的坑
 
 ## 许可

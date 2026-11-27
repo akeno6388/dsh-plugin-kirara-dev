@@ -5,9 +5,9 @@
 不要押在插件检查器上 —— 某些会话的工具表里根本没有 `cordis_inspect_*`。**验收要建立在会话自己
 能观察到的证据上**：
 
-1. 工具表里有 10 个 `kirara_*`：`kirara_start` / `kirara_profile` / `kirara_docs` / `kirara_route` /
+1. 工具表里有 11 个 `kirara_*`：`kirara_start` / `kirara_profile` / `kirara_docs` / `kirara_handoff` /
    `kirara_build` / `kirara_verify` / `kirara_docsync` / `kirara_release_notes` / `kirara_release` /
-   `kirara_summary`
+   `kirara_summary` / `kirara_ui`
 2. **真调一次看返回值**：`kirara_profile({ project: 'desktop' })` 应给出正确的 `workspaceRoot` 与
    `buildLine`；`kirara_docs({ keywords: ['Kirara'] })` 应命中真实文档路径；
    `kirara_docsync({ feature: '修复登录失败', changes: [] })` 应给出文档清单而不是报错；
@@ -15,11 +15,11 @@
 3. **同一会话里内置 `read` / `pwsh` 正常** —— 下面那个「所有工具调用全崩」的事故里，
    它们是和 `kirara_*` 一起崩的
 
-工具**总数不是判据**。会话形态不同，工具数量会浮动，只要 `kirara_*` 十个齐全即为通过。
+工具**总数不是判据**。会话形态不同，工具数量会浮动，只要 `kirara_*` 十一个齐全即为通过。
 
 ### 重启后的验收
 
-1. 工具表里十个 `kirara_*` 全部出现（不必数总数）
+1. 工具表里十一个 `kirara_*` 全部出现（不必数总数）
 2. 在同一会话里调一次内置 `read` 或 `pwsh`；若 `pwsh` 只报
    `Error: SetNamedSecurityInfoW failed (Win32 5): grantWrite(<目录>)`，
    那是沙箱 ACL 的前置条件问题，与插件无关，见下文

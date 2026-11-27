@@ -10,7 +10,8 @@ dsh-plugin-kirara-dev/
 ├── cordis.patch.yml           # insert 层，刻意不写任何与作者机器相关的字段
 ├── lib/                       # 宿主半边，四层（自更新见 docs/self-update.md）
 │   ├── index.js               #   引导层：挂实现 + 自更新路由 + 热重载（很薄）
-│   ├── impl.js                #   实现层：全部插件逻辑（10 个 kirara_* 工具）
+│   ├── impl.js                #   实现层：全部插件逻辑（11 个 kirara_* 工具 + PROJECTS/路由/构建）
+│   ├── prompts.js             #   交接包的文字层：brief 九节 / prompt.md / 回执契约（纯函数，无 IO）
 │   ├── update.js              #   自更新内核：查远端 / 下产物 / 解 tar.gz / 状态机 / 回滚
 │   ├── client.js              #   浏览器半边：插件详情页里的徽标 / 按钮 / 更新区段
 │   └── build-info.js          #   发版印章（随包这一份对应哪个提交，scripts/stamp.mjs 写）
@@ -21,6 +22,7 @@ dsh-plugin-kirara-dev/
 │   ├── deploy.mjs
 │   ├── mount-check.mjs
 │   ├── contract-test.mjs
+│   ├── handoff-test.mjs       # 外部交接：九节齐全 / 预算 / 回执校验 / 路径穿越 / runId 不覆盖
 │   ├── doc-layer-test.mjs     # 分章文档层：发现 / map / search / section / 选章 / 插入计划 / 审计
 │   ├── cache-budget.mjs       # 前缀缓存回归：工具目录逐字节稳定 + 返回值预算
 │   ├── update-e2e.mjs         # 自更新端到端（离线假 GitHub + 真 cordis + 真引导层）
@@ -504,7 +506,8 @@ doesn't match 平台。`pickSimulator()` 的优先级是「配置名 → booted 
 
 ### 与既有链路的关系
 
-- `kirara_start` / `kirara_route`：UI 改动的路线从「构建 → 截图 → 复核」改成「先 `kirara_ui` 内环 → 收敛后 build + verify」；
+- `kirara_start`：UI 改动的路线从「构建 → 截图 → 复核」改成「先 `kirara_ui` 内环 → 收敛后 build + verify」；
+  它的 `detail="route"` 取代了原来的 `kirara_route`（见[外部强模型交接](#外部强模型交接kirara_handoff2026-11)）；
 - `kirara_build(target='ios')`：全量自检仍然保留，但定位改成**收敛后的验收**（返回值里明说别拿它做迭代）；
 - `kirara_verify`：视觉环未闭环时多给一步「先 `status` 看差什么」；`ui-design` 缺截图时 `needScreenshots` 指向 `kirara_ui`；
 - `kirara_summary`：未闭环写进「遗留风险」，零截图也点名 —— 否则「已完成」就是没有证据的自述。
@@ -516,6 +519,58 @@ stdio 服务器（`ctx.mcpManager.register(name, entry)`），生命周期跟随
 
 三条边界：没配 `command` 就什么都不做；用 `ctx.inject` 而不是把 `mcpManager` 写进 `inject` 数组
 （否则没挂 mcp-manager 的 profile 上整个插件挂不起来）；注册失败只打日志，环靠兜底桥继续转。
+
+## 外部强模型交接（`kirara_handoff`，2026-11）
+
+### 在整体链路里的位置
+
+前九节描述的都是「DSH 自己从头做到尾」。`kirara_handoff` 给这条链开了**一个可切换的中段**：
+
+```text
+kirara_start（解读 + 定路线 + 该读哪些文档）        ← DSH
+        ├─ 交给 DSH 自己：改代码 → build → ui → verify
+        └─ 交给外部强模型：open（brief） → 它做 2/3 阶段 → close（report）
+kirara_docsync（文档同步）                          ← DSH，两条链在这里合流
+kirara_summary / kirara_release_notes / kirara_release
+```
+
+它**不替换任何既有工具**：`kirara_build` / `kirara_ui` / `kirara_verify` 仍是 DSH 侧的验证手段，
+外部模型那边只是复用同一批事实（`PROJECTS` 的构建命令与约束、`docsForProject()` 的文档线索、
+`searchDocScopes()` 的检索结果）。这也意味着**同一个需求在哪条链上得到的事实是一致的**。
+
+### 两个路由入口为什么合并成一个
+
+`kirara_route` 与 `kirara_start` 的差别只有「要不要顺带给文档清单与构建命令」，判定逻辑却必须
+永远一致 —— 两条入口同时存在时，模型会随机挑一条，而同一个需求在两条路上得到不同 `mode`
+只是时间问题。所以 `kirara_route` 被并入 `kirara_start(detail="route")`：
+
+- 判定抽成 `resolveRoute()`，`detail="full"` / `detail="route"` / `kirara_handoff(open)` **三处同源**；
+- `detail="route"` 的字段名保持 `plan` / `requiresDeviceVerification` / `nextStep`，老调用方不用改；
+- 唯一的行为差异是刻意的：`detail="route"` **不做 auto 判定**（缺 `mode` 或传 `auto` 直接回 STOP），
+  因为这条路径的语义就是「我已经知道 mode 了」。要自动判定用默认的 `detail="full"`。
+- 工具目录这一轮的账：−620（删掉 `kirara_route`）+133（`kirara_start` 的 `detail` 参数与两处分支）
+  +889（新增 `kirara_handoff`）= **净增 402 字节**，也就是「合并入口」把新工具的增量压掉了三分之二。
+
+### 落盘与路径安全
+
+- 目录默认 `<workspaceRoot>/.kirara-dev/handoff/<runId>`，`runId = KH-YYYYMMDD-HHMM`（本地时间）。
+  同一分钟连续 `open` 会补 `-2` / `-3`，**先看目录是否已存在**再决定，所以两次 `open` 绝不互相覆盖。
+- `handoffRunDir()` 用**严格正则 + resolve 后再确认仍在根内**两道关：`../../x` 连目录都不会被创建。
+- 不碰用户仓库的 `.gitignore`（副作用大且会出现在别人的 diff 里），只在目录里放 `README.txt`。
+- `screenshots[].path` 只在 `shots/` 内解析并 `stat`；越界的路径标 `outside` 且**不做 stat** ——
+  外部输入不能成为「探测任意路径是否存在」的通道。
+
+### 回执校验的三条硬规则
+
+1. **缺 `status` / `summary` / `changed` 任意一项 ⇒ 拒收且不写 `report.json`。**
+   半份结构写下去，下一步的文档同步会拿它当事实，比没有更糟。
+2. **`changed[].file` 原样保留。** 它是 `kirara_docsync({ changes })` 的唯一输入 —— 一旦这里悄悄
+   改写路径（补前缀、换斜杠），选章就会选错，而错法是静默的。
+3. **回执里的字符串永不执行。** 结构校验 + 落盘，就这两件事。`commands[]` 只是给人看/归档的记录，
+   插件不会去重跑它们。
+
+失败处理（外部模型只回了一半、声称 done 但没截图、越界改了 docs/ 等）见
+[外部强模型交接](handoff.md)。
 
 ## 返回值约束
 
@@ -546,6 +601,8 @@ stdio 服务器（`ctx.mcpManager.register(name, entry)`），生命周期跟随
 | 新增或调整「该同步哪几篇文档」 | `DOC_RULES`（规则表）与 `CHORE_SIGNALS` / `FIX_SIGNALS` / `FEATURE_SIGNALS`（定性） |
 | 新增/调整分章文档的发现、编号、锚点、审计规则 | `findChapterDirs` / `parseDocFile` / `auditChapterSet`，并同步 `docs/doc-conventions.md` 与 `scripts/doc-layer-test.mjs` |
 | 换了视觉复核模型 | `VISION_PROVIDER` / `VISION_MODEL` |
+| 改了交接包的九节文案 / prompt / 回执契约 | `lib/prompts.js`（纯函数，`scripts/handoff-test.mjs` 覆盖），并同步 `docs/handoff.md` |
+| 改了交接目录的结构 / 回执校验规则 | `handoffRoot` / `handoffRunDir` / `handoffNewRunId` / `handoffCheckReport` |
 | 改了任何工具的 description / 参数 / 输出预算 | `node scripts/cache-budget.mjs`，并把 `BUDGET` 基线一起改 |
 
 改完 `lib/impl.js`（实现层：工具、流程、`PROJECTS`）后需要同步一次才生效：插件详情页点「同步更新」

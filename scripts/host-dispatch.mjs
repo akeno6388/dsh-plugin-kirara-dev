@@ -76,7 +76,13 @@ const mod = await import(`${pathToFileURL(join(pluginRoot, 'lib', 'impl.js')).hr
 const workspaceRoot = process.env.DSH_WORKSPACE || dirname(pluginDir);
 // uiLoopDir 指到临时目录：kirara_ui 的 review 会**写**状态，
 // 落在真实仓库里就会改掉「这一轮到底看没看过」的事实（那是给 kirara_verify/summary 读的）。
-ctx.plugin(mod, { workspaceRoot, buildTimeoutMs: 1200000, uiLoopDir: join(tmpdir(), 'kirara-ui-loop-dispatch') });
+// handoffDir 同理：kirara_handoff(open) 会写交接包，挂在真实工作区就会在三个仓库旁边留下 .kirara-dev/。
+ctx.plugin(mod, {
+  workspaceRoot,
+  buildTimeoutMs: 1200000,
+  uiLoopDir: join(tmpdir(), 'kirara-ui-loop-dispatch'),
+  handoffDir: join(tmpdir(), 'kirara-handoff-dispatch'),
+});
 await new Promise((r) => setTimeout(r, 60));
 
 let failures = 0;
@@ -101,6 +107,8 @@ async function dispatch(name, callArgs) {
 //   - build 的 android / ios-klib / ios（后者在非 macOS 上走 macCommands 分支）
 //   - verify 的 media-iOS 清单（steps 最长）与 Android 清单、带截图与不带截图
 //   - profile 的 media（带 ios 块）、docsync 的 iOS 规则
+//   - start 的 detail=full / detail=route 两条返回形状（后者是原 kirara_route 的分支）
+//   - handoff 的 open（写交接包）与 close（读外部回执、写 report.md/report.json）
 const cases = [
   ['kirara_profile', { project: 'media' }],
   ['kirara_build', { project: 'media', target: 'ios-klib' }],
@@ -117,7 +125,27 @@ const cases = [
     },
   ],
   ['kirara_start', { request: '在 Mac 上调整 iOS 登录页的按钮间距' }],
-  ['kirara_route', { request: 'iOS 模拟器上验证 WKWebView 桥', mode: 'full' }],
+  // 原 kirara_route 的分支现在挂在 detail=route 上：只回路线（可选键最少的那条路）。
+  ['kirara_start', { request: 'iOS 模拟器上验证 WKWebView 桥', mode: 'full', detail: 'route' }],
+  // 外部交接：open 会写盘（已指到临时 handoffDir），close 读回执并再写两份文件 ——
+  // 两条路都要证明宿主接受返回值（可选键分属 inline / screenshots / blockedBy 等不同分支）。
+  ['kirara_handoff', { action: 'open', request: '给安卓端设置页加一个暗色模式开关' }],
+  [
+    'kirara_handoff',
+    {
+      action: 'close',
+      report: JSON.stringify({
+        status: 'done',
+        summary: '宿主派发回归用的回执',
+        changed: [{ file: 'Kirara_Media/app/src/main/java/com/akeno/kirara/SettingsScreen.kt', why: '回归' }],
+        commands: [{ cmd: 'gradlew.bat assembleDebug', exit: 0, note: '48s' }],
+        screenshots: [{ path: 'shots/shot-01.png', state: '设置页-深色' }],
+        verification: { build: 'ok', uiLoop: 'closed', acceptance: [{ item: '开关可切换', result: 'pass' }] },
+        docsHint: ['设置页一节要更新'],
+        openIssues: [],
+      }),
+    },
+  ],
   ['kirara_docs', { keywords: ['DeviceHub'], project: 'media', maxHits: 4 }],
   // 分章文档层：map / section / 章节+插入计划三种返回分支（可选键不同）。
   ['kirara_docs', { mode: 'map', project: 'desktop' }],

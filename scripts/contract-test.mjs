@@ -129,7 +129,7 @@ function lookup(name) {
   return undefined;
 }
 
-const TOOL_NAMES = ['kirara_start', 'kirara_profile', 'kirara_docs', 'kirara_route', 'kirara_build', 'kirara_verify', 'kirara_summary', 'kirara_docsync', 'kirara_release_notes', 'kirara_release', 'kirara_ui'];
+const TOOL_NAMES = ['kirara_start', 'kirara_profile', 'kirara_docs', 'kirara_handoff', 'kirara_build', 'kirara_verify', 'kirara_summary', 'kirara_docsync', 'kirara_release_notes', 'kirara_release', 'kirara_ui'];
 const definitions = new Map();
 for (const name of TOOL_NAMES) {
   const def = lookup(name);
