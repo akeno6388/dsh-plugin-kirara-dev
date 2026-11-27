@@ -476,6 +476,15 @@ console.log('\n=== 10. kirara_ui 与流程接线（MCP 视觉环 / 未闭环不�
     // (c) 未闭环时：路线要点到视觉环，verify 要开口，summary 要把它记成风险
     const start = await view('kirara_start', { request: '调整 iOS 登录页按钮的间距和配色' });
     console.log('  [c] start 路线含 kirara_ui =', start.value.steps.some((s) => /kirara_ui/.test(s)));
+    // 内环必须排在构建之前：排在后面等于「先构建再看」，正是要改掉的旧顺序。
+    const loopAt = start.value.steps.findIndex((s) => /kirara_ui/.test(s));
+    const buildAt = start.value.steps.findIndex((s) => /^kirara_build/.test(s));
+    console.log('      内环在第', loopAt + 1, '步，构建在第', buildAt + 1, '步（应 内环 < 构建）=', loopAt >= 0 && loopAt < buildAt);
+    // 只有 media 有这条路：纯 desktop 的界面请求不该被塞 media 的视觉环。
+    const desktopStart = await view('kirara_start', { request: '优化 dotnet 后端的日志格式' });
+    console.log('      非 media 请求不塞视觉环 =', !desktopStart.value.steps.some((s) => /kirara_ui/.test(s)));
+    const profile = await view('kirara_profile', { project: 'media' });
+    console.log('      画像里点到视觉环 =', /kirara_ui/.test(profile.text));
 
     const verifyOpen = await view('kirara_verify', { summary: '登录页按钮间距', project: 'media', mode: 'full', purpose: 'ui-design' });
     console.log('      verify 无截图 -> 有 needScreenshots =', Boolean(verifyOpen.value.needScreenshots),
