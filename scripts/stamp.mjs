@@ -22,18 +22,22 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_DIR = path.resolve(HERE, '..');
 const TARGET = path.join(REPO_DIR, 'lib', 'build-info.js');
-// 判据与宿主自更新完全一致：`GET /repos/<repo>/commits?path=lib/impl.js`。
-// 曾经用整个 `lib/` 作 pathspec，于是**印章提交自己**（lib/build-info.js 也在这个目录下）
-// 会被算成「实现层最近提交」—— 结果是「盖完印章、提交印章」之后 `--check` 必然报不一致，
-// 而且 `--format` 与宿主的判据也对不上。只认 impl.js 才既稳定又与宿主同源。
-const IMPL_PATH = 'lib/impl.js';
+// 判据与宿主自更新一致：`GET /repos/<repo>/commits?path=lib`（lib/update.js 里的 IMPL_PATH），
+// 再**排除印章文件自己**（lib/build-info.js 也在 lib/ 下，它变只说明盖了章，不是代码变了）。
+//   · 不要只认 lib/impl.js —— 自更新同步时整体替换的是整个 lib/，只改 lib/update.js 的提交
+//     同样是实现变动（0.4.3 修同步失败就是这样一次提交，当时被 impl.js 判据漏掉了）；
+//   · 也不能用裸 `lib` —— 那样「盖完章再提交印章」之后，印章提交自己就成了 tip，
+//     `--check` 必然报不一致。
+const IMPL_PATH = 'lib';
+const STAMP_REL = 'lib/build-info.js';
 
 function git(args) {
   return execFileSync('git', ['-C', REPO_DIR, ...args], { encoding: 'utf8' }).trim();
 }
 
-/** 实现层最后一次变更的提交；仓库刚建、文件未提交时退回 HEAD。 */
-const head = git(['log', '-1', '--format=%H', '--', IMPL_PATH]) || git(['rev-parse', 'HEAD']);
+/** 实现层最后一次变更的提交（排除印章文件）；仓库刚建、文件未提交时退回 HEAD。 */
+const head =
+  git(['log', '-1', '--format=%H', '--', IMPL_PATH, ':(exclude)' + STAMP_REL]) || git(['rev-parse', 'HEAD']);
 // 印章文件自己预期会变，不算脏。
 const dirty = git(['status', '--porcelain'])
   .split('\n')
