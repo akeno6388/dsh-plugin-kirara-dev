@@ -22,7 +22,11 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_DIR = path.resolve(HERE, '..');
 const TARGET = path.join(REPO_DIR, 'lib', 'build-info.js');
-const IMPL_PATH = 'lib';
+// 判据与宿主自更新完全一致：`GET /repos/<repo>/commits?path=lib/impl.js`。
+// 曾经用整个 `lib/` 作 pathspec，于是**印章提交自己**（lib/build-info.js 也在这个目录下）
+// 会被算成「实现层最近提交」—— 结果是「盖完印章、提交印章」之后 `--check` 必然报不一致，
+// 而且 `--format` 与宿主的判据也对不上。只认 impl.js 才既稳定又与宿主同源。
+const IMPL_PATH = 'lib/impl.js';
 
 function git(args) {
   return execFileSync('git', ['-C', REPO_DIR, ...args], { encoding: 'utf8' }).trim();
