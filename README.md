@@ -29,10 +29,10 @@
 
 | 工具 | 说明 |
 | --- | --- |
-| `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题。`mode=auto` 会在 `docs` / `full` / `small` 之间判定；`detail=route` 只出路线（原 `kirara_route`，此时 `mode` 必须显式给） |
+| `kirara_start` | **入口**。给一句话需求，返回涉及哪几端、该先读哪几篇文档、各端构建命令、是否需要实机验证、有没有需要你拍板的问题。`mode=auto` 会在 `docs` / `full` / `small` 之间判定；`detail=route` 只出路线（原 `kirara_route`，此时 `mode` 必须显式给）；`handoff=true`（或需求里出现「外部模型 / 外协 / 交给外部」）走**外协路线**：只回「需求拆分 → 知识库前置 → `kirara_handoff(open)` → STOP → 收尾」，不给内环步骤 |
 | `kirara_profile` | 返回三端的项目画像：技术栈、构建/运行命令、硬约束。用来替代整篇读那些几百 KB 的技术文档。顺带做一次**死链自检**：`PROJECTS` 里登记了但磁盘上不存在的文档路径会在末尾以 `⚠️ 失效文档路径（n）` 列出（都正常时这一行不出现，零成本） |
 | `kirara_docs` | **分章文档检索**。`mode=map` 先看章节地图（章 / 小节 / 显式锚点 / 结构审计），`mode=search` 按关键词返回 `文件:行号` + 所属章/节/锚点，`mode=section` 用 `03.2` 或 `#auth` 只读单节 |
-| `kirara_handoff` | **外部强模型交接**。`action=open`（`executor=file` 默认给交接目录里的 brief，`executor=chat` 把 brief 正文直接塞进返回值）落下 brief（九节）/ `prompt.md` / `shots/` 并给出可粘贴的 prompt；`action=close` 校验外部回执、写 `report.md` + `report.json`，回出 `changed[]` 喂给 `kirara_docsync`，可选用 `verifyBuild=stat/rerun` 把回执自述与磁盘/复跑结果对一遍。不发网络请求、不轮询、不执行回执里的任何字符串 |
+| `kirara_handoff` | **外部强模型交接**。`action=open`（`executor=file` 默认给交接目录里的 brief，`executor=chat` 把 brief 正文直接塞进返回值）落下 brief（九节）/ `prompt.md` / `shots/` 并给出可粘贴的 prompt；`action=close` 校验外部回执、写 `report.md` + `report.json`，回出 `changed[]` 喂给 `kirara_docsync`，可选用 `verifyBuild=stat/rerun` 把回执自述与磁盘/复跑结果对一遍。交接窗口内（`kirara_start(外协)` → `open`）DSH 若已探查过代码/构建/设备，`open` 会拒绝并点名，`force:true` 可放行。不发网络请求、不轮询、不执行回执里的任何字符串 |
 | `kirara_build` | 跑真实构建，返回成功与否、退出码、耗时、错误行、日志尾部。media 是双端，`target` 可选 `android` / `ios-klib` / `ios-framework` / `ios`（`ios` 会跑模拟器自检并直接产出 UI 截图） |
 | `kirara_verify` | 产出分步的真机验收清单（步骤 + 预期结果）；传入截图路径可以额外拿到一段视觉复核协议，`purpose=ui-design` 时给的是「该怎么改」的 P0/P1 修改建议 |
 | `kirara_docsync` | **文档同步**。自行判断本轮改动属于新功能 / BUG 修复 / 界面改动 / 纯内部整理，按 `frontmatter.files` + 标题关键词选章、选节，产出**插入位置**（改哪节，或在第几行新增 `## NN.M` + 锚点）、frontmatter 补文件、99 变更记录条目与写作规范 |
@@ -552,8 +552,11 @@ Android 侧要同样的能力，需要一台跑得起来的设备（真机开 US
 
 ### 与外部强模型交接（`kirara_handoff`）
 
-分工可以是这样的：**DSH 负责「读懂 + 定路线 + 检索文档 + 收回执 + 同步文档 + 发版」，
-外部强模型（带 MCP 的编码智能体）负责「改代码 + 跑构建 + 用 MCP 实时看界面 + 自验收」**。
+分工是固定的：**DSH 负责「需求拆分 + 定路线 + 检索文档（知识库前置）+ 收回执 + 同步文档 + 发版」，
+外部强模型（带 MCP 的编码智能体）负责「定位原因 + 方案设计 + 改代码 + 跑构建 + 用 MCP 实时看界面 + 自验收」**。
+触发外协后 DSH **不做代码探查**——交接窗口内读源码 / 构建 / 设备取证会被 `open` 直接拒绝，
+越界要用 `force:true` 放行（事实会写进 brief）。切入点的来龙去脉见
+[外部强模型交接 · 切入点](docs/handoff.md#切入点交接发生在需求拆分之后)。
 
 问题是这两者不共享上下文：把需求用聊天记录转述过去，第二次转述就和第一次不一样了；
 把「哪些端、什么约束、读过哪几段文档、怎么算验收通过」也靠嘴说，等于让外部模型猜。

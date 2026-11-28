@@ -4,21 +4,83 @@
 
 | 阶段 | 谁做 | 产出 |
 | --- | --- | --- |
-| 1 | DSH（本插件） | 需求解读、路由判定、检索文档、产出**交接包**（brief） |
-| 2 / 3 | 外部强模型（有 MCP 的编码智能体） | 改代码、跑构建、用 MCP 实时视觉迭代、自验收、产出**回执**（report） |
+| 1 | DSH（本插件） | 需求**拆分**、路由判定、检索文档（知识库前置）、产出**交接包**（brief） |
+| 2 / 3 | 外部强模型（有 MCP 的编码智能体） | **定位原因**、改代码、跑构建、用 MCP 实时视觉迭代、自验收、产出**回执**（report） |
 | 4 | DSH（本插件） | 收回执、文档同步、发布、总结 |
 
 靠聊天记录转述这件事有个必然的衰减：第二次转述和第一次不一样，而外部模型那边**没有任何办法
 发现自己少读了一条约束**。所以 `kirara_handoff` 把交接的两端都落成文件，用路径而不是记忆传递。
 
+> ⚠️ 交接交付的是**需求**，不是**结论**。DSH 侧不做代码探查、不做根因分析、不提供改法 ——
+> 定位与方案是阶段 2/3 的活。这一条有运行时强制，见[切入点](#切入点交接发生在需求拆分之后)。
+
+## 切入点：交接发生在需求拆分之后
+
+初版（0.4.0–0.4.3）把交接当成「开发到一半可以转交」的动作，`kirara_start` 给出的流程里
+根本没有它。后果是可复现的：模型照着内环流程先检索、再读源码、起模拟机定位根因，交接时
+交付的已经是**结论**——外部模型只剩「照这份 spec 改代码」，退化成执行层。
+
+一段实测会话（2026-11-28）的数字：`kirara_handoff(open)` 发生在**第 94 步**，
+之前有 **73 次**探查调用（pwsh 47 / read_image 17 / read 12 / grep 4 / 模拟机点击 3 / write 3），
+`request` 里直接写着「模拟机定位到三条根因」。同一条需求第二轮的 `open` 甚至发生在第 8 轮
+第 31 步——前面的交付全是 DSH 自己的分析。
+
+### 三处修正
+
+1. **外协是一条路由信号，不是途中的动作。**
+   `HANDOFF_SIGNALS`（外部模型 / 外协 / 交给外部 / 输出提示词 …）命中，或显式传
+   `kirara_start(handoff: true)`，`kirara_start` 就**只回交接路线**：
+   需求拆分 → 知识库前置 → `kirara_handoff(open)` → STOP → 收尾。
+   内环那 8 步（改代码 / UI 内环 / 构建 / 实机验证）在这一分岔里**完全不出现**。
+
+2. **交接窗口内禁止探查（硬拦截）。**
+   从 `kirara_start(外协)` 到 `kirara_handoff(open)` 之间，DSH 只要碰过下面任何一类，
+   `open` 直接拒绝并点名：
+
+   | 类别 | 命中 |
+   | --- | --- |
+   | 构建与装包 | `kirara_build` |
+   | 设备取证与截图 | `kirara_ui`、`mcp__android-mcp__*`、`mcp__playwright-mcp__*`、`avalonia_*` |
+   | 读 / 检索源码 | `read`、`grep`、`glob`、`read_image` |
+   | 任意 shell | `pwsh`、`bash` |
+
+   观测走 DSH 的 `tools/result`（observe-only）：插件只记账，裁决发生在 `open`。
+   `force: true` 可以放行，但越界事实会写进返回值 `openIssues` 与 brief 第 1 节，
+   让外部模型知道「这份需求可能带着 DSH 的结论，请当假设复核」。
+
+3. **open 成功即关闭窗口。**
+   close 之后的收尾（`verifyBuild=rerun` 复跑构建、`kirara_verify` 实机清单、`kirara_release`）
+   重新放行 —— 收尾本来就要用这些能力。
+
+### 为什么不是只改提示词
+
+因为试过了。0.4.3 的 brief/prompt 措辞本身没有教 DSH 去探查，但它也没有**禁止**，
+而流程给了它一条顺路的走法。只改措辞时 `open` 仍在第 94 步。
+所以这一条做成「登记表 + open 时拒绝」，措辞只负责解释，不负责执行。
+
+```js
+// 分岔：关键词命中即走交接路线
+kirara_start({ request: '评论面板底板对不齐，本次交给外部模型' })
+// → handoff=true，流程只剩 5 步，第 3 步就是 open
+
+// 窗口内探查过 ⇒ 被拒
+kirara_handoff({ action: 'open', request: '…' })
+// → ok:false，「交接窗口内 DSH 已经做过具体探查：读/检索源码（read×1）；构建与装包（kirara_build×1）」
+
+// 确实要先在 DSH 里复现时放行，越界事实进 brief
+kirara_handoff({ action: 'open', request: '…', force: true })
+```
+
+
 ## 流程图
 
 ```mermaid
 flowchart TD
-    A["用户: 一句话需求"] --> B["kirara_start<br/>定路线（mode / 涉及端 / 待拍板项）"]
-    B --> C{"需要外部强模型接手？"}
+    A["用户: 一句话需求"] --> B["kirara_start<br/>定路线 + 外协判定（关键词 / handoff:true）"]
+    B --> C{"外协？"}
     C -- "否" --> D["DSH 内环<br/>改代码 → kirara_build → kirara_ui → kirara_verify"]
-    C -- "是" --> E["kirara_handoff(action=open)<br/>写 brief.md / brief.json / prompt.md + shots/"]
+    C -- "是" --> B2["需求拆分 + 知识库前置<br/>kirara_docs / kirara_profile<br/>⛔ 窗口内禁止探查"]
+    B2 --> E["kirara_handoff(action=open)<br/>写 brief.md / brief.json / prompt.md + shots/"]
 
     E --> F["人把 prompt.md 交给外部模型<br/>（返回值里也带粘贴块）"]
     F --> G["外部模型: 读 brief.md → 改代码 →<br/>跑构建 → MCP 截图进 shots/ → 自验收"]
@@ -63,7 +125,7 @@ flowchart TD
 
 | # | 章节 | 写什么 | 数据来源 |
 | --- | --- | --- | --- |
-| 1 | 任务卡 | runId、生成时间、需求原文、mode 与判定依据、需人拍板的点 | `resolveRoute()` |
+| 1 | 任务卡 | runId、生成时间、需求原文、**需求形态**（需求拆分 / DSH 未做探查）、mode 与判定依据、需人拍板的点、`force` 放行时的越界记录 | `resolveRoute()` + 交接窗口 |
 | 2 | 你的边界 | 可做（改代码 / 跑构建 / 截图 / 用 MCP）；不可做（改技术文档 / 发版 / 改版本号 / 改插件 / 扩大范围）；`SAFETY_RULES` 原样 | 固定文案 + `SAFETY_RULES` |
 | 3 | 涉及端 | key、标题、仓库目录、技术栈、构建命令、产物、iOS 版本锁 | `findProject` / `buildLineFor` |
 | 4 | 必读事实 | 该端 `constraints` **全量**；iOS 相关时挑 3 条 `pitfalls`（按需求词命中排序） | `PROJECTS[].constraints` / `.ios.pitfalls` |
